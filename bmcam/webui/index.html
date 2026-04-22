@@ -1,0 +1,683 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>bmcam inspector</title>
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<style>
+:root {
+  --bg: #0f1115;
+  --panel: #171a21;
+  --panel2: #1f232c;
+  --text: #e6e8eb;
+  --muted: #8a93a2;
+  --accent: #4ea1ff;
+  --ok: #4ccf7b;
+  --warn: #e2a14b;
+  --err: #e35b5b;
+  --rec: #e35b5b;
+  --border: #2a2f3a;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; background: var(--bg); color: var(--text);
+  font: 14px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+header { padding: 12px 18px; border-bottom: 1px solid var(--border);
+  display: flex; align-items: center; gap: 16px; background: var(--panel); }
+header h1 { font-size: 15px; margin: 0; letter-spacing: 0.5px; }
+header .host { color: var(--muted); font-family: ui-monospace, monospace; }
+header .spacer { flex: 1; }
+#conn { font-family: ui-monospace, monospace; font-size: 12px;
+  padding: 2px 8px; border-radius: 10px; border: 1px solid var(--border); }
+#conn.ok { color: var(--ok); border-color: var(--ok); }
+#conn.err { color: var(--err); border-color: var(--err); }
+#warnBanner { display: none; padding: 10px 18px; background: #3b2416;
+  color: var(--warn); border-bottom: 1px solid var(--border);
+  font-family: ui-monospace, monospace; font-size: 13px; }
+#warnBanner.show { display: block; }
+main { display: grid; grid-template-columns: repeat(auto-fit,minmax(360px,1fr));
+  gap: 14px; padding: 14px; }
+.panel { background: var(--panel); border: 1px solid var(--border);
+  border-radius: 8px; padding: 14px; }
+.panel h2 { font-size: 12px; margin: 0 0 10px 0; text-transform: uppercase;
+  letter-spacing: 1px; color: var(--muted); }
+.row { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+.row label { min-width: 120px; color: var(--muted); }
+.row .value { flex: 1; font-family: ui-monospace, monospace; color: var(--text); }
+button { background: var(--panel2); color: var(--text); border: 1px solid var(--border);
+  padding: 8px 14px; border-radius: 6px; cursor: pointer; font-size: 13px; }
+button:hover { border-color: var(--accent); color: var(--accent); }
+button.primary { background: var(--accent); color: #0a0f18; border-color: var(--accent); }
+button.danger { background: var(--rec); color: #fff; border-color: var(--rec); }
+button.danger:hover { color: #fff; }
+button:disabled { opacity: 0.5; cursor: not-allowed; }
+input, select { background: var(--panel2); color: var(--text); border: 1px solid var(--border);
+  padding: 6px 8px; border-radius: 4px; font-family: ui-monospace, monospace; font-size: 13px;
+  width: 100%; }
+input[type=range] { padding: 0; }
+.grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+pre.log { background: #0a0c10; border: 1px solid var(--border); border-radius: 4px;
+  padding: 8px; height: 240px; overflow: auto; margin: 0;
+  font-family: ui-monospace, monospace; font-size: 12px; color: #c6cfdd;
+  white-space: pre-wrap; word-break: break-word; }
+.pill { display: inline-block; padding: 1px 8px; border-radius: 10px;
+  font-size: 11px; font-family: ui-monospace, monospace; border: 1px solid var(--border); }
+.pill.rec { background: var(--rec); color: #fff; border-color: var(--rec); }
+.pill.idle { color: var(--muted); }
+.pill.warn { color: var(--warn); border-color: var(--warn); }
+table { width: 100%; border-collapse: collapse; font-size: 12px; }
+th, td { padding: 6px 8px; border-bottom: 1px solid var(--border); text-align: left;
+  font-family: ui-monospace, monospace; }
+th { color: var(--muted); font-weight: 500; }
+td a { color: var(--accent); text-decoration: none; }
+td a:hover { text-decoration: underline; }
+.bar { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.muted { color: var(--muted); }
+.err { color: var(--err); }
+.ok  { color: var(--ok); }
+.warn { color: var(--warn); }
+details summary { cursor: pointer; color: var(--muted); font-size: 12px; }
+details[open] summary { color: var(--text); margin-bottom: 6px; }
+.mono { font-family: ui-monospace, monospace; }
+.log .info  { color: #c6cfdd; }
+.log .warn  { color: var(--warn); }
+.log .error { color: var(--err); }
+.log .event { color: var(--accent); }
+.breadcrumb { font-family: ui-monospace, monospace; font-size: 12px; color: var(--muted);
+  margin-bottom: 8px; }
+.breadcrumb a { color: var(--accent); cursor: pointer; text-decoration: none; }
+.breadcrumb a:hover { text-decoration: underline; }
+</style>
+</head>
+<body>
+<header>
+  <h1>bmcam inspector</h1>
+  <span class="host" id="host">—</span>
+  <span class="spacer"></span>
+  <span id="conn">disconnected</span>
+  <button id="refresh">refresh</button>
+</header>
+
+<div id="warnBanner"></div>
+
+<main>
+  <!-- RECORD -->
+  <section class="panel">
+    <h2>recording</h2>
+    <div class="row">
+      <label>state</label>
+      <span class="value"><span id="recPill" class="pill idle">idle</span></span>
+    </div>
+    <div class="row">
+      <label>timecode</label>
+      <span class="value" id="timecode">—</span>
+    </div>
+    <div class="row">
+      <label>active disk</label>
+      <span class="value" id="activeDiskLine">—</span>
+    </div>
+    <div class="row">
+      <label>scene name</label>
+      <input id="sceneName" placeholder="optional — becomes clip filename"
+             style="flex:1" maxlength="60" />
+    </div>
+    <div class="bar">
+      <button id="recStart" class="danger">● start recording</button>
+      <button id="recStop">■ stop</button>
+    </div>
+    <div class="muted mono" style="font-size:11px;margin-top:6px">
+      leave blank for the camera's default name (e.g.
+      <code>1001_HHMMSS_C001.braw</code>).
+    </div>
+  </section>
+
+  <!-- FORMAT -->
+  <section class="panel">
+    <h2>video format</h2>
+    <div class="row"><label>codec</label><span class="value" id="codec">—</span></div>
+    <div class="row"><label>frame rate</label><span class="value" id="fpsCur">—</span></div>
+    <div class="row"><label>resolution</label><span class="value" id="res">—</span></div>
+    <div class="row"><label>sensor</label><span class="value" id="sensorRes">—</span></div>
+    <div class="row">
+      <label>off-speed</label>
+      <span class="value" id="offSpeed">—</span>
+    </div>
+
+    <div style="border-top:1px solid var(--border);margin:10px 0;padding-top:10px">
+      <div class="grid2">
+        <div>
+          <label class="muted">codec</label>
+          <input id="setCodec" placeholder="e.g. BRaw:8_1" />
+        </div>
+        <div>
+          <label class="muted">fps</label>
+          <input id="setFps" placeholder="23.976, 24, 25, 30, 50..." />
+        </div>
+        <div>
+          <label class="muted">width</label>
+          <input id="setW" type="number" placeholder="6144" />
+        </div>
+        <div>
+          <label class="muted">height</label>
+          <input id="setH" type="number" placeholder="3456" />
+        </div>
+      </div>
+      <div class="bar" style="margin-top:8px">
+        <button id="formatApply" class="primary">apply</button>
+        <button id="formatReload">reload</button>
+      </div>
+      <div id="formatErr" class="err mono" style="margin-top:6px;font-size:12px"></div>
+    </div>
+  </section>
+
+  <!-- VIDEO PARAMS -->
+  <section class="panel">
+    <h2>video parameters</h2>
+    <div id="videoParams"></div>
+  </section>
+
+  <!-- STORAGE -->
+  <section class="panel">
+    <h2>storage</h2>
+    <table>
+      <thead><tr>
+        <th>slot</th><th>device</th><th>active</th><th>clips</th>
+        <th>free</th><th>total</th><th>rec time</th>
+      </tr></thead>
+      <tbody id="disks"></tbody>
+    </table>
+  </section>
+
+  <!-- CLIP INDEX (from /timelines/0) -->
+  <section class="panel">
+    <h2>clip index <span class="muted" id="clipCount"></span></h2>
+    <table>
+      <thead><tr><th>name</th><th>duration</th></tr></thead>
+      <tbody id="clips"></tbody>
+    </table>
+  </section>
+
+  <!-- FILE BROWSER (WMM /mounts) -->
+  <section class="panel" style="grid-column: 1 / -1;">
+    <h2>files on disk <span class="muted" id="fileHint"></span></h2>
+    <div class="breadcrumb" id="fbCrumb">—</div>
+    <table>
+      <thead><tr>
+        <th>name</th><th>type</th><th>size</th><th>modified</th><th></th>
+      </tr></thead>
+      <tbody id="fbList"></tbody>
+    </table>
+    <div id="fbErr" class="err mono" style="margin-top:6px;font-size:12px"></div>
+  </section>
+
+  <!-- CAMERA EVENTS -->
+  <section class="panel" style="grid-column: 1 / -1;">
+    <h2>camera events (websocket)
+      <span id="wsStatus" class="muted mono" style="text-transform:none;letter-spacing:0">—</span>
+    </h2>
+    <div class="bar" style="margin-bottom:8px">
+      <button id="wsReconnect">reconnect</button>
+      <button id="wsClear">clear</button>
+    </div>
+    <pre id="wsLog" class="log"></pre>
+  </section>
+
+  <!-- SERVER LOG -->
+  <section class="panel" style="grid-column: 1 / -1;">
+    <h2>server log
+      <span id="slStatus" class="muted mono" style="text-transform:none;letter-spacing:0">—</span>
+    </h2>
+    <div class="bar" style="margin-bottom:8px">
+      <button id="slReconnect">reconnect</button>
+      <button id="slClear">clear</button>
+    </div>
+    <pre id="slLog" class="log"></pre>
+  </section>
+
+  <!-- RAW STATUS -->
+  <section class="panel" style="grid-column: 1 / -1;">
+    <details>
+      <summary>raw /api/status payload</summary>
+      <pre id="raw" class="log" style="height: 300px"></pre>
+    </details>
+  </section>
+</main>
+
+<script>
+const VIDEO_PARAMS = [
+  { name: 'iso',              key: 'iso',                type: 'number', step: 1 },
+  { name: 'shutter',          key: 'shutterSpeed',       type: 'number', step: 1 },
+  { name: 'whiteBalance',     key: 'whiteBalance',       type: 'number', step: 50 },
+  { name: 'whiteBalanceTint', key: 'whiteBalanceTint',   type: 'number', step: 1 },
+  { name: 'gain',             key: 'gain',               type: 'number', step: 1 },
+  { name: 'ndFilter',         key: 'stop',               type: 'number', step: 0.25 },
+];
+
+const api = {
+  async get(p)          { return fetch(p).then(r => r.ok ? r.json() : Promise.reject(r)); },
+  async post(p, body)   { return fetch(p, { method: 'POST', headers:{'Content-Type':'application/json'}, body: body ? JSON.stringify(body) : undefined }).then(async r => r.ok ? r.json() : Promise.reject(await r.json().catch(()=>({status:r.status})))); },
+  async patch(p, body)  { return fetch(p, { method: 'PATCH', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body) }).then(async r => r.ok ? r.json() : Promise.reject(await r.json().catch(()=>({status:r.status})))); },
+  async put(p, body)    { return fetch(p, { method: 'PUT',   headers:{'Content-Type':'application/json'}, body: JSON.stringify(body) }).then(async r => r.ok ? r.json() : Promise.reject(await r.json().catch(()=>({status:r.status})))); },
+};
+
+function setConn(ok, text) {
+  const el = document.getElementById('conn');
+  el.className = ok ? 'ok' : 'err';
+  el.textContent = text;
+}
+
+function setBanner(msg, cls) {
+  const b = document.getElementById('warnBanner');
+  if (!msg) { b.className = ''; b.textContent = ''; return; }
+  b.className = 'show ' + (cls || '');
+  b.textContent = msg;
+}
+
+function fmtTC(tc) {
+  if (tc == null) return '—';
+  const b = tc.toString(16).padStart(8, '0');
+  return `${b.slice(0,2)}:${b.slice(2,4)}:${b.slice(4,6)}:${b.slice(6,8)}`;
+}
+
+function fmtBytes(n) {
+  if (!n) return '—';
+  const u = ['B','KB','MB','GB','TB'];
+  let i = 0; while (n >= 1024 && i < u.length-1) { n /= 1024; i++; }
+  return `${n.toFixed(n < 10 ? 2 : 1)} ${u[i]}`;
+}
+
+function fmtSecs(s) {
+  if (!s) return '—';
+  const h = Math.floor(s/3600), m = Math.floor((s%3600)/60), sec = s%60;
+  return `${h}h${String(m).padStart(2,'0')}m${String(sec).padStart(2,'0')}s`;
+}
+
+function fmtWhen(ts) {
+  if (!ts) return '—';
+  const d = new Date(ts * 1000);
+  return d.toLocaleString();
+}
+
+function renderVideoParams(container, video) {
+  container.innerHTML = '';
+  for (const { name, key, step } of VIDEO_PARAMS) {
+    const cur = video && video[name];
+    const currentVal = cur && cur[key];
+    const row = document.createElement('div');
+    row.className = 'row';
+    row.innerHTML = `
+      <label>${name}</label>
+      <input data-name="${name}" data-key="${key}" type="number" step="${step}"
+             value="${currentVal ?? ''}" placeholder="${cur ? JSON.stringify(cur) : 'unavailable'}"
+             style="max-width:140px" />
+      <button data-apply="${name}">set</button>
+      <span class="value mono" style="flex:1;color:var(--muted)">${cur ? JSON.stringify(cur) : '—'}</span>
+    `;
+    container.appendChild(row);
+  }
+  container.querySelectorAll('button[data-apply]').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const name = btn.dataset.apply;
+      const input = container.querySelector(`input[data-name="${name}"]`);
+      const key = input.dataset.key;
+      const val = Number(input.value);
+      if (Number.isNaN(val)) return;
+      try {
+        await api.put(`/api/video/${name}`, { [key]: val });
+        await loadStatus();
+      } catch (e) {
+        alert(`failed: ${JSON.stringify(e)}`);
+      }
+    });
+  });
+}
+
+let _activeDisk = null;
+
+function renderStorage(tbody, storage) {
+  tbody.innerHTML = '';
+  if (!storage || !storage.workingset) return;
+  const ws = storage.workingset.workingset || storage.workingset;
+  if (!Array.isArray(ws)) return;
+  let hasActive = false;
+  for (const d of ws) {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td>${d.index ?? ''}</td>
+      <td>${d.deviceName || '(empty)'}</td>
+      <td>${d.activeDisk ? '●' : ''}</td>
+      <td>${d.clipCount ?? 0}</td>
+      <td>${fmtBytes(d.remainingSpace)}</td>
+      <td>${fmtBytes(d.totalSpace)}</td>
+      <td>${fmtSecs(d.remainingRecordTime)}</td>
+    `;
+    tbody.appendChild(tr);
+    if (d.activeDisk && d.deviceName) {
+      hasActive = true;
+      _activeDisk = d;
+    }
+  }
+  const activeLine = document.getElementById('activeDiskLine');
+  if (hasActive) {
+    activeLine.innerHTML = `<span class="ok">${_activeDisk.deviceName}</span> · ${fmtBytes(_activeDisk.remainingSpace)} free · ${fmtSecs(_activeDisk.remainingRecordTime)} rec time`;
+    setBanner('', '');
+  } else {
+    _activeDisk = null;
+    activeLine.innerHTML = `<span class="warn">none</span>`;
+    setBanner('⚠ no active recording disk — insert/reconnect a drive on the camera. Recording will auto-stop until a writable disk is active.', 'warn');
+  }
+}
+
+function renderClips(tbody, clips) {
+  tbody.innerHTML = '';
+  if (!clips || !clips.length) {
+    tbody.innerHTML = '<tr><td colspan="2" class="muted">(no clips)</td></tr>';
+    document.getElementById('clipCount').textContent = '';
+    return;
+  }
+  for (const c of clips.slice().reverse()) {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td>${c.fileName || c.filePath || c.clipUniqueId || '?'}</td>
+      <td>${fmtSecs(Math.floor((c.duration || 0) / 1000))}</td>
+    `;
+    tbody.appendChild(tr);
+  }
+  document.getElementById('clipCount').textContent = `(${clips.length})`;
+}
+
+async function loadStatus() {
+  try {
+    const s = await api.get('/api/status');
+    document.getElementById('host').textContent = s.host || '';
+    setConn(true, `connected · ${s.host}`);
+    document.getElementById('raw').textContent = JSON.stringify(s, null, 2);
+
+    const rec = s.record || {};
+    const pill = document.getElementById('recPill');
+    if (rec.recording) { pill.className = 'pill rec'; pill.textContent = 'REC'; }
+    else { pill.className = 'pill idle'; pill.textContent = 'idle'; }
+    document.getElementById('timecode').textContent = fmtTC(s.timecode && s.timecode.timecode);
+
+    const f = s.format || {};
+    document.getElementById('codec').textContent = f.codec || '—';
+    document.getElementById('fpsCur').textContent = f.frameRate || '—';
+    if (f.recordResolution) document.getElementById('res').textContent =
+      `${f.recordResolution.width}×${f.recordResolution.height}`;
+    if (f.sensorResolution) document.getElementById('sensorRes').textContent =
+      `${f.sensorResolution.width}×${f.sensorResolution.height}`;
+    document.getElementById('offSpeed').textContent =
+      f.offSpeedEnabled ? `${f.offSpeedFrameRate} fps (range ${f.minOffSpeedFrameRate}–${f.maxOffSpeedFrameRate})` : 'disabled';
+
+    renderVideoParams(document.getElementById('videoParams'), s.video || {});
+    renderStorage(document.getElementById('disks'), s.media || {});
+
+    const clips = await api.get('/api/files').catch(() => []);
+    renderClips(document.getElementById('clips'), clips);
+
+    loadFiles();
+  } catch (e) {
+    setConn(false, 'error loading status');
+    console.error(e);
+  }
+}
+
+// --- file browser (WMM /mounts) --------------------------------------------
+let _fbPath = null;  // starts at null → if active disk present, show its root
+
+function fbPathEncode(p) {
+  return p.split('/').map(encodeURIComponent).join('/');
+}
+
+async function loadFiles() {
+  const list = document.getElementById('fbList');
+  const crumb = document.getElementById('fbCrumb');
+  const err = document.getElementById('fbErr');
+  const hint = document.getElementById('fileHint');
+  err.textContent = '';
+  hint.textContent = '';
+
+  // If no path chosen yet, default to the first mount's path (WMM uses
+  // paths like "usb/UNTITLED", not the REST-API deviceName).
+  if (_fbPath === null) {
+    try {
+      const mounts = await api.get('/api/mounts');
+      if (Array.isArray(mounts) && mounts.length) {
+        _fbPath = '/' + (mounts[0].name || mounts[0].deviceName || '');
+      } else {
+        _fbPath = '';
+      }
+    } catch {
+      _fbPath = '';
+    }
+  }
+
+  try {
+    let items;
+    if (_fbPath === '') {
+      items = await api.get('/api/mounts');
+      crumb.innerHTML = `<a data-path="">mounts</a>`;
+      hint.textContent = '(no disk path yet — pick a mount)';
+      list.innerHTML = '';
+      for (const d of items || []) {
+        const name = d.name || d.deviceName || d;
+        const tr = document.createElement('tr');
+        tr.innerHTML = `
+          <td><a data-dir="/${name}">${name}/</a></td>
+          <td>mount</td><td>—</td><td>—</td><td></td>
+        `;
+        list.appendChild(tr);
+      }
+      if (!(items && items.length)) {
+        list.innerHTML = '<tr><td colspan="5" class="muted">(no mounts — is a disk attached?)</td></tr>';
+      }
+    } else {
+      items = await api.get('/api/mounts' + fbPathEncode(_fbPath));
+      // breadcrumb
+      const parts = _fbPath.split('/').filter(Boolean);
+      let acc = '';
+      const crumbs = [`<a data-dir="">mounts</a>`];
+      for (const p of parts) {
+        acc += '/' + p;
+        crumbs.push(`<a data-dir="${acc}">${p}</a>`);
+      }
+      crumb.innerHTML = crumbs.join(' / ');
+
+      list.innerHTML = '';
+      if (!Array.isArray(items) || !items.length) {
+        list.innerHTML = '<tr><td colspan="5" class="muted">(empty)</td></tr>';
+      } else {
+        const toMs = (v) => {
+          if (!v) return 0;
+          if (typeof v === 'number') return v > 1e12 ? v : v * 1000;
+          const t = Date.parse(v);
+          return Number.isFinite(t) ? t : 0;
+        };
+        // sort: latest first (regardless of type), dirs group slightly after
+        // files when mtime ties
+        const sorted = items.slice().sort((a, b) => {
+          const at = toMs(a.mtime || a.modified || a.created);
+          const bt = toMs(b.mtime || b.modified || b.created);
+          if (at !== bt) return bt - at;
+          const ad = (a.type || '').toLowerCase() === 'directory';
+          const bd = (b.type || '').toLowerCase() === 'directory';
+          if (ad !== bd) return ad ? 1 : -1;
+          return (b.name || '').localeCompare(a.name || '');
+        });
+        for (const it of sorted) {
+          const name = it.name || '?';
+          const type = (it.type || '').toLowerCase();
+          const isDir = type === 'directory';
+          const size = isDir ? '—' : fmtBytes(it.size || it.bytes);
+          const mod = it.modified || it.mtime || it.created || '';
+          const tr = document.createElement('tr');
+          const childPath = _fbPath + '/' + name;
+          if (isDir) {
+            tr.innerHTML = `
+              <td><a data-dir="${childPath}">${name}/</a></td>
+              <td>dir</td><td>—</td><td>${mod}</td><td></td>`;
+          } else {
+            const dl = '/api/download' + fbPathEncode(childPath);
+            tr.innerHTML = `
+              <td>${name}</td>
+              <td>file</td>
+              <td>${size}</td>
+              <td>${mod}</td>
+              <td><a href="${dl}" download>download</a></td>`;
+          }
+          list.appendChild(tr);
+        }
+      }
+    }
+
+    // wire up nav links
+    crumb.querySelectorAll('a[data-dir]').forEach(a => {
+      a.addEventListener('click', (e) => {
+        e.preventDefault();
+        _fbPath = a.dataset.dir;
+        loadFiles();
+      });
+    });
+    list.querySelectorAll('a[data-dir]').forEach(a => {
+      a.addEventListener('click', (e) => {
+        e.preventDefault();
+        _fbPath = a.dataset.dir;
+        loadFiles();
+      });
+    });
+  } catch (e) {
+    err.textContent = typeof e === 'string' ? e : (e.detail || e.status || JSON.stringify(e));
+  }
+}
+
+// --- events websocket ------------------------------------------------------
+document.getElementById('refresh').addEventListener('click', loadStatus);
+document.getElementById('formatReload').addEventListener('click', loadStatus);
+
+document.getElementById('recStart').addEventListener('click', async () => {
+  const name = document.getElementById('sceneName').value.trim();
+  const body = name ? { clipName: name } : null;
+  try { await api.post('/api/record/start', body); }
+  catch (e) {
+    if (e && e.error === 'no_media') setBanner('⚠ ' + e.detail, 'warn');
+    else alert(JSON.stringify(e));
+  }
+  await loadStatus();
+});
+document.getElementById('recStop').addEventListener('click', async () => {
+  try { await api.post('/api/record/stop'); } catch (e) { alert(JSON.stringify(e)); }
+  setTimeout(loadStatus, 300);
+});
+
+document.getElementById('formatApply').addEventListener('click', async () => {
+  const body = {};
+  const codec = document.getElementById('setCodec').value.trim();
+  const fps   = document.getElementById('setFps').value.trim();
+  const w     = document.getElementById('setW').value.trim();
+  const h     = document.getElementById('setH').value.trim();
+  if (codec) body.codec = codec;
+  if (fps)   body.frameRate = fps;
+  if (w)     body.width  = Number(w);
+  if (h)     body.height = Number(h);
+  const err = document.getElementById('formatErr');
+  err.textContent = '';
+  if (!Object.keys(body).length) { err.textContent = 'fill at least one field'; return; }
+  try {
+    await api.patch('/api/format', body);
+    await loadStatus();
+  } catch (e) {
+    err.textContent = typeof e === 'string' ? e : JSON.stringify(e);
+  }
+});
+
+// websocket events
+let ws = null;
+const wsLog = document.getElementById('wsLog');
+const wsStatus = document.getElementById('wsStatus');
+function appendLine(pre, text, cls) {
+  const span = document.createElement('span');
+  span.className = cls || 'info';
+  span.textContent = text + '\n';
+  pre.appendChild(span);
+  pre.scrollTop = pre.scrollHeight;
+}
+function formatEvent(ev) {
+  if (!ev || typeof ev !== 'object') return String(ev);
+  if (ev.error) return `[err] ${ev.error}: ${ev.detail || ''}`;
+  const d = ev.data || {};
+  if (ev.type === 'event' && d.action === 'propertyValueChanged') {
+    const val = typeof d.value === 'object' ? JSON.stringify(d.value) : d.value;
+    return `${d.property} = ${val}`;
+  }
+  if (ev.type === 'response') {
+    const ok = d.success ? 'ok' : 'fail';
+    if (d.action === 'subscribe') {
+      return `subscribe ${ok} (${(d.properties||[]).length} props)`;
+    }
+    return `${d.action} ${ok}`;
+  }
+  return JSON.stringify(ev);
+}
+function wsConnect() {
+  if (ws) try { ws.close(); } catch {}
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  ws = new WebSocket(`${proto}://${location.host}/api/events`);
+  wsStatus.textContent = 'connecting…';
+  ws.onopen    = () => { wsStatus.textContent = 'open'; appendLine(wsLog, '[ws] connected', 'event'); };
+  ws.onclose   = () => { wsStatus.textContent = 'closed'; appendLine(wsLog, '[ws] closed', 'warn'); };
+  ws.onerror   = () => { wsStatus.textContent = 'error'; };
+  ws.onmessage = (e) => {
+    const t = new Date().toISOString().slice(11, 19);
+    let ev = null;
+    try { ev = JSON.parse(e.data); } catch {}
+    const line = `[${t}] ${ev ? formatEvent(ev) : e.data}`;
+    const cls = ev && ev.error ? 'error' :
+                (ev && ev.type === 'event') ? 'event' : 'info';
+    appendLine(wsLog, line, cls);
+    if (ev && ev.type === 'event' && ev.data && /record|media|timeline|format/i.test(ev.data.property || '')) {
+      setTimeout(loadStatus, 150);
+    }
+  };
+}
+document.getElementById('wsReconnect').addEventListener('click', wsConnect);
+document.getElementById('wsClear').addEventListener('click', () => { wsLog.textContent = ''; });
+
+// server log websocket
+let slws = null;
+const slLog = document.getElementById('slLog');
+const slStatus = document.getElementById('slStatus');
+function slConnect() {
+  if (slws) try { slws.close(); } catch {}
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  slws = new WebSocket(`${proto}://${location.host}/api/logs/ws`);
+  slStatus.textContent = 'connecting…';
+  slws.onopen    = () => { slStatus.textContent = 'open'; };
+  slws.onclose   = () => { slStatus.textContent = 'closed'; };
+  slws.onerror   = () => { slStatus.textContent = 'error'; };
+  slws.onmessage = (e) => {
+    let ent = null;
+    try { ent = JSON.parse(e.data); } catch {}
+    if (!ent) { appendLine(slLog, e.data, 'info'); return; }
+    const t = new Date(ent.ts * 1000).toISOString().slice(11, 19);
+    const lvl = (ent.level || '').toLowerCase();
+    const cls = lvl === 'error' ? 'error' : lvl === 'warning' ? 'warn' : 'info';
+    appendLine(slLog, `[${t}] ${ent.level.padEnd(5)} ${ent.message}`, cls);
+  };
+}
+document.getElementById('slReconnect').addEventListener('click', slConnect);
+document.getElementById('slClear').addEventListener('click', () => { slLog.textContent = ''; });
+
+// auto-refresh every 2s
+let pollId = null;
+function startPoll() { if (pollId) return; pollId = setInterval(loadStatus, 2000); }
+function stopPoll()  { clearInterval(pollId); pollId = null; }
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) stopPoll(); else { loadStatus(); startPoll(); }
+});
+
+loadStatus();
+startPoll();
+wsConnect();
+slConnect();
+</script>
+</body>
+</html>

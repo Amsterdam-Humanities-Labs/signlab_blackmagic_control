@@ -1,0 +1,36 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "bmcam"
+version = "0.1.0"
+description = "CLI + library for controlling Blackmagic cameras over the Camera Control REST API"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "gotterspeer" }]
+dependencies = [
+    "requests>=2.31",
+    "click>=8.1",
+    "websocket-client>=1.7",
+    "fastapi>=0.110",
+    "uvicorn>=0.27",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.4",
+    "responses>=0.24",
+    "httpx>=0.27",
+]
+
+[project.scripts]
+bmcam = "bmcam.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["bmcam*"]
+
+[tool.setuptools.package-data]
+bmcam = ["webui/*.html", "webui/*.css", "webui/*.js"]
