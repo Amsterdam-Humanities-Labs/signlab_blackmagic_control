@@ -1,0 +1,10 @@
+camera_host: 192.168.0.194
+camera_user: vislab
+camera_password: "Blabla100?"
+camera_timeout: 5.0
+
+service_name: BlackmagicCamera
+service_type: _mocap._tcp.local.
+bind: 0.0.0.0
+port: 8780
+

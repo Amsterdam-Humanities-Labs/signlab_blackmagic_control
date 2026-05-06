@@ -1,0 +1,4 @@
+-e .
+zeroconf>=0.132
+websockets>=12
+PyYAML>=6
