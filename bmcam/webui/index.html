@@ -145,25 +145,29 @@ details[open] summary { color: var(--text); margin-bottom: 6px; }
     <div style="border-top:1px solid var(--border);margin:10px 0;padding-top:10px">
       <div class="grid2">
         <div>
+          <label class="muted">resolution</label>
+          <select id="setRes"></select>
+        </div>
+        <div>
           <label class="muted">codec</label>
-          <input id="setCodec" placeholder="e.g. BRaw:8_1" />
+          <select id="setCodec"></select>
         </div>
         <div>
           <label class="muted">fps</label>
-          <input id="setFps" placeholder="23.976, 24, 25, 30, 50..." />
+          <select id="setFps"></select>
         </div>
         <div>
-          <label class="muted">width</label>
-          <input id="setW" type="number" placeholder="6144" />
-        </div>
-        <div>
-          <label class="muted">height</label>
-          <input id="setH" type="number" placeholder="3456" />
+          <label class="muted">off-speed fps</label>
+          <input id="setOffFps" type="number" placeholder="(disabled)"
+                 step="0.001" />
         </div>
       </div>
       <div class="bar" style="margin-top:8px">
         <button id="formatApply" class="primary">apply</button>
         <button id="formatReload">reload</button>
+        <label class="muted mono" style="font-size:12px">
+          <input type="checkbox" id="setOffEnabled" /> off-speed
+        </label>
       </div>
       <div id="formatErr" class="err mono" style="margin-top:6px;font-size:12px"></div>
     </div>
@@ -244,12 +248,29 @@ details[open] summary { color: var(--text); margin-bottom: 6px; }
 
 <script>
 const VIDEO_PARAMS = [
-  { name: 'iso',              key: 'iso',                type: 'number', step: 1 },
-  { name: 'shutter',          key: 'shutterSpeed',       type: 'number', step: 1 },
-  { name: 'whiteBalance',     key: 'whiteBalance',       type: 'number', step: 50 },
-  { name: 'whiteBalanceTint', key: 'whiteBalanceTint',   type: 'number', step: 1 },
-  { name: 'gain',             key: 'gain',               type: 'number', step: 1 },
-  { name: 'ndFilter',         key: 'stop',               type: 'number', step: 0.25 },
+  { name: 'iso',              key: 'iso',                step: 1,
+    presets: [100,200,400,800,1250,1600,3200,6400,12800,25600],
+    min: 100, max: 25600 },
+  { name: 'shutter',          key: 'shutterSpeed',       step: 1,
+    // shutter speed = 1/N seconds. Common cinema/TV values:
+    presets: [24,25,30,48,50,60,96,100,120,200,250,500,1000,2000,4000,8000],
+    min: 24, max: 50000,
+    fmtLabel: (v) => `1/${v} s` },
+  { name: 'whiteBalance',     key: 'whiteBalance',       step: 50,
+    presets: [2500,3000,3200,3700,4000,4500,5000,5600,6000,6500,7500,8500,10000],
+    min: 2500, max: 10000,
+    fmtLabel: (v) => `${v} K` },
+  { name: 'whiteBalanceTint', key: 'whiteBalanceTint',   step: 1,
+    presets: [-50,-25,-10,-5,0,5,10,25,50],
+    min: -50, max: 50 },
+  { name: 'gain',             key: 'gain',               step: 6,
+    presets: [-12,-6,0,6,12,18,24,30,36],
+    min: -128, max: 128,
+    fmtLabel: (v) => `${v} dB` },
+  { name: 'ndFilter',         key: 'stop',               step: 0.25,
+    presets: [0,1,2,4,6],
+    min: 0, max: 15,
+    fmtLabel: (v) => `${v} stop` },
 ];
 
 const api = {
@@ -299,30 +320,54 @@ function fmtWhen(ts) {
 
 function renderVideoParams(container, video) {
   container.innerHTML = '';
-  for (const { name, key, step } of VIDEO_PARAMS) {
+  for (const p of VIDEO_PARAMS) {
+    const { name, key, step, presets, min, max, fmtLabel } = p;
     const cur = video && video[name];
     const currentVal = cur && cur[key];
     const row = document.createElement('div');
     row.className = 'row';
+
+    // Build dropdown of presets, marking the current value as selected. If
+    // the camera's current value isn't in the preset list, prepend it so it
+    // remains visible.
+    const values = presets.slice();
+    if (currentVal != null && !values.includes(currentVal)) {
+      values.unshift(currentVal);
+    }
+    const opts = values.map(v => {
+      const sel = (v === currentVal) ? ' selected' : '';
+      const lbl = fmtLabel ? fmtLabel(v) : String(v);
+      return `<option value="${v}"${sel}>${lbl}</option>`;
+    }).join('');
+
+    const id = `vp-${name}`;
     row.innerHTML = `
       <label>${name}</label>
-      <input data-name="${name}" data-key="${key}" type="number" step="${step}"
-             value="${currentVal ?? ''}" placeholder="${cur ? JSON.stringify(cur) : 'unavailable'}"
-             style="max-width:140px" />
+      <select id="${id}-sel" data-name="${name}" data-key="${key}"
+              style="max-width:160px">${opts}</select>
+      <input id="${id}-num" type="number" step="${step}" min="${min}" max="${max}"
+             value="${currentVal ?? ''}" data-name="${name}" data-key="${key}"
+             style="max-width:100px" />
       <button data-apply="${name}">set</button>
       <span class="value mono" style="flex:1;color:var(--muted)">${cur ? JSON.stringify(cur) : '—'}</span>
     `;
     container.appendChild(row);
+
+    // Sync select → number input
+    const sel = row.querySelector(`#${id}-sel`);
+    const num = row.querySelector(`#${id}-num`);
+    sel.addEventListener('change', () => { num.value = sel.value; });
   }
   container.querySelectorAll('button[data-apply]').forEach(btn => {
     btn.addEventListener('click', async () => {
       const name = btn.dataset.apply;
-      const input = container.querySelector(`input[data-name="${name}"]`);
-      const key = input.dataset.key;
-      const val = Number(input.value);
+      const num = container.querySelector(`input[data-name="${name}"]`);
+      const key = num.dataset.key;
+      const val = Number(num.value);
       if (Number.isNaN(val)) return;
       try {
         await api.put(`/api/video/${name}`, { [key]: val });
+        _videoParamsBuilt = false;
         await loadStatus();
       } catch (e) {
         alert(`failed: ${JSON.stringify(e)}`);
@@ -408,7 +453,17 @@ async function loadStatus() {
     document.getElementById('offSpeed').textContent =
       f.offSpeedEnabled ? `${f.offSpeedFrameRate} fps (range ${f.minOffSpeedFrameRate}–${f.maxOffSpeedFrameRate})` : 'disabled';
 
-    renderVideoParams(document.getElementById('videoParams'), s.video || {});
+    // Only rebuild format dropdowns on first load or explicit reload — don't
+    // clobber the user's in-progress dropdown selection on a 2 s poll.
+    if (!_formatBuilt) {
+      _formatBuilt = true;
+      loadSupportedFormats(f);
+    }
+
+    if (!_videoParamsBuilt) {
+      _videoParamsBuilt = true;
+      renderVideoParams(document.getElementById('videoParams'), s.video || {});
+    }
     renderStorage(document.getElementById('disks'), s.media || {});
 
     const clips = await api.get('/api/files').catch(() => []);
@@ -550,8 +605,13 @@ async function loadFiles() {
 }
 
 // --- events websocket ------------------------------------------------------
-document.getElementById('refresh').addEventListener('click', loadStatus);
-document.getElementById('formatReload').addEventListener('click', loadStatus);
+document.getElementById('refresh').addEventListener('click', () => {
+  _formatBuilt = false; _videoParamsBuilt = false;
+  loadStatus();
+});
+document.getElementById('formatReload').addEventListener('click', () => {
+  _formatBuilt = false; loadStatus();
+});
 
 document.getElementById('recStart').addEventListener('click', async () => {
   const name = document.getElementById('sceneName').value.trim();
@@ -568,21 +628,102 @@ document.getElementById('recStop').addEventListener('click', async () => {
   setTimeout(loadStatus, 300);
 });
 
+// --- supported formats / format dropdowns ----------------------------------
+let _supportedFormats = [];
+let _formatBuilt = false;
+let _videoParamsBuilt = false;
+
+function _resKey(f) {
+  const r = f.recordResolution || {};
+  return `${r.width}x${r.height}`;
+}
+
+function buildResolutionOptions(curRes) {
+  const sel = document.getElementById('setRes');
+  const seen = new Set();
+  const opts = [];
+  for (const f of _supportedFormats) {
+    const k = _resKey(f);
+    if (seen.has(k)) continue;
+    seen.add(k);
+    opts.push(k);
+  }
+  const want = curRes && `${curRes.width}x${curRes.height}`;
+  sel.innerHTML = opts.map(k =>
+    `<option value="${k}"${k === want ? ' selected' : ''}>${k}</option>`
+  ).join('');
+}
+
+function buildCodecFpsForRes(resKey, curCodec, curFps) {
+  // Combine ALL formats matching the resolution (some firmwares list one
+  // entry per resolution; some split). Take the union.
+  const codecs = new Set();
+  const rates = new Set();
+  for (const f of _supportedFormats) {
+    if (_resKey(f) !== resKey) continue;
+    for (const c of (f.codecs || [])) codecs.add(c);
+    for (const r of (f.frameRates || [])) rates.add(r);
+  }
+  const codecOpts = Array.from(codecs);
+  const fpsOpts = Array.from(rates).sort((a, b) => parseFloat(a) - parseFloat(b));
+  const cs = document.getElementById('setCodec');
+  const fs = document.getElementById('setFps');
+  cs.innerHTML = codecOpts.map(c =>
+    `<option value="${c}"${c === curCodec ? ' selected' : ''}>${c}</option>`
+  ).join('');
+  fs.innerHTML = fpsOpts.map(r =>
+    `<option value="${r}"${r === curFps ? ' selected' : ''}>${r}</option>`
+  ).join('');
+}
+
+async function loadSupportedFormats(currentFormat) {
+  if (!_supportedFormats.length) {
+    try {
+      _supportedFormats = await api.get('/api/supportedFormats');
+    } catch {
+      _supportedFormats = [];
+    }
+  }
+  const f = currentFormat || {};
+  buildResolutionOptions(f.recordResolution);
+  const resKey = (f.recordResolution
+    ? `${f.recordResolution.width}x${f.recordResolution.height}` : null)
+    || document.getElementById('setRes').value;
+  buildCodecFpsForRes(resKey, f.codec, f.frameRate);
+  document.getElementById('setOffEnabled').checked = !!f.offSpeedEnabled;
+  document.getElementById('setOffFps').value = f.offSpeedFrameRate ?? '';
+}
+
+document.getElementById('setRes').addEventListener('change', (e) => {
+  // when resolution changes, refilter codec/fps using current selections if
+  // they're still valid
+  const cs = document.getElementById('setCodec');
+  const fs = document.getElementById('setFps');
+  buildCodecFpsForRes(e.target.value, cs.value, fs.value);
+});
+
 document.getElementById('formatApply').addEventListener('click', async () => {
   const body = {};
-  const codec = document.getElementById('setCodec').value.trim();
-  const fps   = document.getElementById('setFps').value.trim();
-  const w     = document.getElementById('setW').value.trim();
-  const h     = document.getElementById('setH').value.trim();
+  const res = document.getElementById('setRes').value;
+  const codec = document.getElementById('setCodec').value;
+  const fps = document.getElementById('setFps').value;
   if (codec) body.codec = codec;
   if (fps)   body.frameRate = fps;
-  if (w)     body.width  = Number(w);
-  if (h)     body.height = Number(h);
+  if (res) {
+    const [w, h] = res.split('x').map(Number);
+    if (Number.isFinite(w)) body.width = w;
+    if (Number.isFinite(h)) body.height = h;
+  }
+  const offEnabled = document.getElementById('setOffEnabled').checked;
+  const offFpsRaw = document.getElementById('setOffFps').value.trim();
+  body.offSpeedEnabled = offEnabled;
+  if (offEnabled && offFpsRaw) body.offSpeedFrameRate = Number(offFpsRaw);
   const err = document.getElementById('formatErr');
   err.textContent = '';
   if (!Object.keys(body).length) { err.textContent = 'fill at least one field'; return; }
   try {
     await api.patch('/api/format', body);
+    _formatBuilt = false;
     await loadStatus();
   } catch (e) {
     err.textContent = typeof e === 'string' ? e : JSON.stringify(e);

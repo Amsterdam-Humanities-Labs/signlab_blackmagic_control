@@ -11,11 +11,13 @@ from typing import Any
 
 from pathlib import Path
 
+from typing import Literal
+
 from fastapi import Body, Depends, FastAPI, Header, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 _WEBUI_DIR = Path(__file__).parent / "webui"
 
@@ -66,17 +68,340 @@ if not any(isinstance(h, logging.StreamHandler) and not isinstance(h, _LogRing)
     logger.addHandler(_sh)
 
 
+# --- request/response schemas ----------------------------------------------
+# Codec + frame-rate enums come from the camera's own supportedFormats payload
+# (see GET /api/supportedFormats for the live, per-resolution combinations).
+# These cover every value the camera will accept on at least one resolution.
+
+Codec = Literal[
+    "BRaw:Q0", "BRaw:Q1", "BRaw:Q3", "BRaw:Q5",
+    "BRaw:3_1", "BRaw:5_1", "BRaw:8_1", "BRaw:12_1",
+]
+FrameRate = Literal[
+    "23.98", "24", "25", "29.97", "30", "50", "59.94", "60",
+]
+
+
 class FormatPatch(BaseModel):
-    codec: str | None = None
-    frameRate: str | None = None
-    width: int | None = None
-    height: int | None = None
-    offSpeedEnabled: bool | None = None
-    offSpeedFrameRate: float | None = None
+    """Patch the camera's record format. All fields optional — only the
+    fields you send are changed; unspecified fields are preserved.
+
+    Note: not every (resolution, codec, fps) combo is valid. Call
+    `GET /api/supportedFormats` to see what's allowed on this body.
+    `6144x3456` (full open-gate) maxes at 50 fps.
+    """
+    codec: Codec | None = Field(
+        default=None,
+        description="BlackmagicRAW variant. `Q*` = constant quality, "
+                    "`N_1` = constant bitrate (lower N = bigger files).",
+        examples=["BRaw:8_1"],
+    )
+    frameRate: FrameRate | None = Field(
+        default=None,
+        description="Recording frame rate as a string.",
+        examples=["50"],
+    )
+    width: int | None = Field(
+        default=None,
+        description="Record width in pixels. Combine with `height`. "
+                    "Allowed: 3840, 5376, 6144 (consult supportedFormats).",
+        examples=[6144],
+    )
+    height: int | None = Field(
+        default=None,
+        description="Record height in pixels.",
+        examples=[3456],
+    )
+    offSpeedEnabled: bool | None = Field(
+        default=None,
+        description="Enable variable / off-speed frame rate (slow-mo).",
+    )
+    offSpeedFrameRate: float | None = Field(
+        default=None,
+        description="Off-speed capture rate. Range depends on codec/res; "
+                    "typical 5..50 at 6K, up to 60 at lower res.",
+        examples=[48.0],
+    )
 
 
 class RecordStartBody(BaseModel):
-    clipName: str | None = None
+    """Optional body for `POST /api/record/start`."""
+    clipName: str | None = Field(
+        default=None,
+        description="Filename for the next clip (without extension). "
+                    "Letters, digits, `_`, `-`. Leave null/empty to use the "
+                    "camera's auto-generated name like `1001_HHMMSS_C001.braw`.",
+        examples=["MyScene_Take1"],
+        max_length=60,
+    )
+
+
+class IsoBody(BaseModel):
+    iso: int = Field(..., ge=100, le=25600, examples=[400],
+                     description="ISO. Common stops: 100, 200, 400, 800, "
+                                 "1250, 1600, 3200, 6400, 12800, 25600.")
+
+
+class GainBody(BaseModel):
+    gain: int = Field(..., ge=-12, le=36, examples=[0],
+                      description="Gain in dB. Practical stops on this body: "
+                                  "-12, -6, 0, 6, 12, 18, 24, 30, 36. "
+                                  "(YAML nominal range -128..128.)")
+
+
+class WhiteBalanceBody(BaseModel):
+    whiteBalance: int = Field(..., ge=2500, le=10000, examples=[5600],
+                              description="Color temperature in Kelvin.")
+
+
+class WhiteBalanceTintBody(BaseModel):
+    whiteBalanceTint: int = Field(..., ge=-50, le=50, examples=[10],
+                                  description="Magenta(+) / green(−) tint.")
+
+
+class ShutterBody(BaseModel):
+    """Send exactly one of `shutterSpeed` or `shutterAngle`. If both are
+    present, `shutterSpeed` wins (per the camera's YAML)."""
+    shutterSpeed: int | None = Field(
+        default=None, ge=1, le=50000, examples=[200],
+        description="Denominator of 1/N s. Min equals sensor frame rate.")
+    shutterAngle: int | None = Field(
+        default=None, ge=100, le=36000, examples=[18000],
+        description="Shutter angle × 100 (e.g. 18000 = 180°).")
+
+
+class NdFilterBody(BaseModel):
+    stop: float = Field(..., ge=0.0, le=15.0, examples=[2.0],
+                        description="ND power in stops (this body has no "
+                                    "internal ND but the endpoint exists).")
+
+
+_VIDEO_BODY_MODELS = {
+    "iso": IsoBody,
+    "gain": GainBody,
+    "whiteBalance": WhiteBalanceBody,
+    "whiteBalanceTint": WhiteBalanceTintBody,
+    "shutter": ShutterBody,
+    "ndFilter": NdFilterBody,
+}
+
+
+VideoParamName = Literal[
+    "iso", "shutter", "whiteBalance", "whiteBalanceTint", "gain", "ndFilter",
+]
+
+
+# --- response schemas ------------------------------------------------------
+
+class Resolution(BaseModel):
+    width: int = Field(
+        ..., ge=1280, le=12288, examples=[6144],
+        description="Pixels. On this body: 3840, 5376, or 6144.",
+    )
+    height: int = Field(
+        ..., ge=720, le=8640, examples=[3456],
+        description="Pixels. On this body: 2160, 2560, 3024, or 3456.",
+    )
+
+
+class VideoFormatResponse(BaseModel):
+    """Shape of `GET /api/format`. Same shape returned after `PATCH`."""
+    codec: Codec | None = Field(
+        default=None, examples=["BRaw:8_1"],
+        description="Active recording codec. One of the 8 BRaw variants.",
+    )
+    frameRate: FrameRate | None = Field(
+        default=None, examples=["50"],
+        description="Active frame rate (string). 6144x3456 max is '50'.",
+    )
+    recordResolution: Resolution | None = Field(
+        default=None,
+        description="Recording resolution. Allowed combinations are listed "
+                    "by `GET /api/supportedFormats`.",
+    )
+    sensorResolution: Resolution | None = Field(
+        default=None,
+        description="Sensor crop driving the record resolution.",
+    )
+    offSpeedEnabled: bool | None = Field(
+        default=None, examples=[False],
+        description="When true, recording uses `offSpeedFrameRate` (slow-mo "
+                    "or fast-mo) decoupled from the timeline frame rate.",
+    )
+    offSpeedFrameRate: float | None = Field(
+        default=None, ge=1, le=120, examples=[48.0],
+        description="Off-speed capture rate. On this body, valid range is "
+                    "`minOffSpeedFrameRate`..`maxOffSpeedFrameRate` for the "
+                    "current resolution/codec.",
+    )
+    minOffSpeedFrameRate: float | None = Field(
+        default=None, ge=1, le=120, examples=[5],
+        description="Lower bound for `offSpeedFrameRate` at current settings.",
+    )
+    maxOffSpeedFrameRate: float | None = Field(
+        default=None, ge=1, le=120, examples=[50],
+        description="Upper bound for `offSpeedFrameRate` at current settings.",
+    )
+
+
+class SupportedFormatEntry(BaseModel):
+    recordResolution: Resolution
+    sensorResolution: Resolution
+    codecs: list[Codec] = Field(..., examples=[[
+        "BRaw:Q0", "BRaw:Q1", "BRaw:Q3", "BRaw:Q5",
+        "BRaw:3_1", "BRaw:5_1", "BRaw:8_1", "BRaw:12_1",
+    ]])
+    frameRates: list[FrameRate] = Field(..., examples=[[
+        "23.98", "24", "25", "29.97", "30", "50", "59.94", "60",
+    ]])
+    minOffSpeedFrameRate: float | None = None
+    maxOffSpeedFrameRate: float | None = None
+
+
+class RecordStateResponse(BaseModel):
+    """Shape of `GET /api/record`."""
+    recording: bool = Field(..., examples=[False])
+
+
+class TimecodeResponse(BaseModel):
+    timecode: int | None = Field(
+        default=None,
+        description="Time-of-day timecode as BCD-packed integer "
+                    "(0xHHMMSSFF — decode as hex digits → HH:MM:SS:FF).",
+        examples=[0x13422510],
+    )
+    clip: int | None = Field(default=None, examples=[0x00010012])
+
+
+class IsoResponse(BaseModel):
+    iso: int = Field(
+        ..., ge=100, le=25600, examples=[400],
+        description="Sensor ISO. Practical stops: 100, 200, 400, 800, 1250, "
+                    "1600, 3200, 6400, 12800, 25600 on the Studio 6K Pro. "
+                    "(YAML nominal range is 0..2147483647 but the camera will "
+                    "snap to its native sensitivities.)",
+    )
+
+
+class GainResponse(BaseModel):
+    gain: int = Field(
+        ..., ge=-12, le=36, examples=[0],
+        description="Gain in dB. Practical stops on this body: -12, -6, 0, 6, "
+                    "12, 18, 24, 30, 36. (YAML nominal range -128..128.)",
+    )
+
+
+class WhiteBalanceResponse(BaseModel):
+    whiteBalance: int = Field(
+        ..., ge=2500, le=10000, examples=[5600],
+        description="Color temperature in Kelvin. Common presets: 3200 "
+                    "(tungsten), 4000, 4500, 5600 (daylight), 6500.",
+    )
+
+
+class WhiteBalanceTintResponse(BaseModel):
+    whiteBalanceTint: int = Field(
+        ..., ge=-50, le=50, examples=[10],
+        description="Magenta(+) / green(−) tint offset.",
+    )
+
+
+class ShutterResponse(BaseModel):
+    continuousShutterAutoExposure: bool | None = Field(
+        default=None, examples=[False],
+        description="True if shutter is currently driven by auto-exposure.",
+    )
+    shutterSpeed: int | None = Field(
+        default=None, ge=24, le=50000, examples=[200],
+        description="Denominator of 1/N s. Min equals current sensor frame "
+                    "rate; max 50000. Common: 48, 50, 60, 96, 100, 120, "
+                    "200, 250, 500, 1000, 2000, 4000.",
+    )
+    shutterAngle: int | None = Field(
+        default=None, ge=100, le=36000, examples=[18000],
+        description="Shutter angle × 100 (e.g. 18000 = 180°). Range "
+                    "100 (1°) .. 36000 (360°).",
+    )
+
+
+class NdFilterResponse(BaseModel):
+    stop: float = Field(
+        ..., ge=0.0, le=15.0, examples=[0.0],
+        description="ND power in stops. Range 0..15. The Studio 6K Pro has "
+                    "no internal ND, so this typically stays at 0.",
+    )
+
+
+class FilenameResponse(BaseModel):
+    filename: str | None = Field(default=None, examples=["MyScene_Take1.braw"])
+
+
+class DiskInfo(BaseModel):
+    index: int = Field(..., examples=[0])
+    deviceName: str = Field(..., examples=["usb4352"])
+    volume: str | None = Field(default=None, examples=["UNTITLED"])
+    activeDisk: bool = Field(..., examples=[True])
+    clipCount: int = Field(..., examples=[14])
+    totalSpace: int = Field(..., examples=[10000619536384],
+                            description="Total bytes on this disk.")
+    remainingSpace: int = Field(..., examples=[9509425905664],
+                                description="Free bytes on this disk.")
+    remainingRecordTime: int = Field(..., examples=[78538],
+                                     description="Seconds at current codec/fps.")
+
+
+class StorageResponse(BaseModel):
+    active: dict | None = Field(
+        default=None,
+        description="Active disk descriptor: "
+                    "`{deviceName, workingsetIndex}`.",
+        examples=[{"deviceName": "usb4352", "workingsetIndex": 0}],
+    )
+    workingset: dict | list | None = Field(
+        default=None,
+        description="Either `{size, workingset:[DiskInfo,...]}` or a flat list, "
+                    "depending on firmware. List members follow `DiskInfo`.",
+    )
+
+
+class ClipEntry(BaseModel):
+    clipUniqueId: int | None = None
+    fileName: str | None = Field(default=None, examples=["MyScene_Take1.braw"])
+    duration: int | None = Field(default=None, examples=[5320],
+                                 description="Duration in milliseconds.")
+    frameCount: int | None = None
+
+
+class MountEntry(BaseModel):
+    name: str = Field(..., examples=["usb/UNTITLED"],
+                      description="WMM-style mount path; combine with file "
+                                  "names to build URLs.")
+    type: str = Field(..., examples=["directory"])
+    mtime: str | None = Field(
+        default=None,
+        description="HTTP-date-formatted modification time.",
+        examples=["Wed, 22 Apr 2026 13:33:09"])
+
+
+class FileEntry(BaseModel):
+    name: str = Field(..., examples=["MyScene_Take1.braw"])
+    type: Literal["file", "directory"] = Field(..., examples=["file"])
+    size: int | None = Field(default=None, examples=[123664184],
+                             description="Bytes (files only).")
+    mtime: str | None = Field(default=None, examples=["Wed, 22 Apr 2026 13:33:09"])
+
+
+class LogEntry(BaseModel):
+    ts: float = Field(..., examples=[1776857135.97],
+                      description="Unix epoch seconds.")
+    level: str = Field(..., examples=["INFO"])
+    logger: str = Field(..., examples=["bmcam"])
+    message: str = Field(..., examples=["record/start → {'recording': True}"])
+
+
+class HealthResponse(BaseModel):
+    status: str = Field(..., examples=["ok"])
+    cameraHost: str = Field(..., examples=["192.168.0.194"])
 
 
 class Settings:
@@ -100,9 +425,33 @@ class Settings:
 def build_app(settings: Settings) -> FastAPI:
     app = FastAPI(
         title="bmcam server",
-        description="HTTP facade over a Blackmagic camera's REST API. "
-        "Wraps record/format/media controls for easy consumption from a website.",
-        version="0.1.0",
+        description=(
+            "HTTP facade over a Blackmagic camera's REST API.\n\n"
+            "**Format:** `PATCH /api/format` accepts `codec`, `frameRate`, "
+            "`width`, `height`, `offSpeedEnabled`, `offSpeedFrameRate`. "
+            "Not every combination is valid — call "
+            "[`GET /api/supportedFormats`](#/format/get_supported_formats_api_supportedFormats_get) "
+            "for the allowed (resolution × codec × fps) matrix on this body.\n\n"
+            "**Video parameters:** `PUT /api/video/{name}` where name is one of "
+            "`iso`, `shutter`, `whiteBalance`, `whiteBalanceTint`, `gain`, "
+            "`ndFilter`. Body shape depends on `name` — see the "
+            "model dropdown on the request body schema for each option.\n\n"
+            "**Record:** `POST /api/record/start` optionally takes "
+            "`{\"clipName\":\"...\"}` to name the next clip.\n\n"
+            "**Files:** `GET /api/mounts` / `GET /api/mounts/{path}` to list, "
+            "`GET /api/download/{path}` to stream-download a clip."
+        ),
+        version="0.2.0",
+        openapi_tags=[
+            {"name": "health", "description": "Liveness."},
+            {"name": "record", "description": "Start/stop recording."},
+            {"name": "format", "description": "Codec, fps, resolution."},
+            {"name": "video",  "description": "ISO / shutter / WB / gain / ND."},
+            {"name": "media",  "description": "Disks and clip index."},
+            {"name": "files",  "description": "Browse and download captured clips."},
+            {"name": "logs",   "description": "Server log ring buffer."},
+            {"name": "events", "description": "Camera property-change websocket relay."},
+        ],
     )
 
     app.add_middleware(
@@ -172,7 +521,8 @@ def build_app(settings: Settings) -> FastAPI:
             content={"error": "camera_error", "detail": str(exc)},
         )
 
-    @app.get("/api/health")
+    @app.get("/api/health", tags=["health"], summary="Liveness probe.",
+             response_model=HealthResponse)
     def health() -> dict:
         return {"status": "ok", "cameraHost": settings.host}
 
@@ -187,17 +537,25 @@ def build_app(settings: Settings) -> FastAPI:
             name="webui",
         )
 
-    @app.get("/api/status", dependencies=[Depends(_require_key)])
+    @app.get("/api/status", tags=["media"],
+             summary="Aggregate snapshot of format, record, video, media.",
+             dependencies=[Depends(_require_key)])
     def get_status() -> dict:
         with _camera() as cam:
             return cam.status()
 
-    @app.get("/api/record", dependencies=[Depends(_require_key)])
+    @app.get("/api/record", tags=["record"],
+             summary="Current recording state.",
+             response_model=RecordStateResponse,
+             dependencies=[Depends(_require_key)])
     def get_record() -> dict:
         with _camera() as cam:
             return cam.record_state() or {}
 
-    @app.post("/api/record/start", dependencies=[Depends(_require_key)])
+    @app.post("/api/record/start", tags=["record"],
+              summary="Start recording (optionally with a clip name).",
+              response_model=RecordStateResponse,
+              dependencies=[Depends(_require_key)])
     def post_record_start(body: RecordStartBody = Body(default=RecordStartBody())) -> dict:
         clip_name = (body.clipName or "").strip() or None
         with _camera() as cam:
@@ -211,7 +569,10 @@ def build_app(settings: Settings) -> FastAPI:
             logger.info(f"record/start → {state}")
             return state
 
-    @app.post("/api/record/stop", dependencies=[Depends(_require_key)])
+    @app.post("/api/record/stop", tags=["record"],
+              summary="Stop recording.",
+              response_model=RecordStateResponse,
+              dependencies=[Depends(_require_key)])
     def post_record_stop() -> dict:
         with _camera() as cam:
             logger.info("record/stop requested")
@@ -220,12 +581,26 @@ def build_app(settings: Settings) -> FastAPI:
             logger.info(f"record/stop → {state}")
             return state
 
-    @app.get("/api/format", dependencies=[Depends(_require_key)])
+    @app.get("/api/format", tags=["format"],
+             summary="Current record format (codec/fps/resolution).",
+             response_model=VideoFormatResponse,
+             dependencies=[Depends(_require_key)])
     def get_format() -> dict:
         with _camera() as cam:
             return cam.get_format()
 
-    @app.patch("/api/format", dependencies=[Depends(_require_key)])
+    @app.get("/api/supportedFormats", tags=["format"],
+             summary="Allowed (resolution × codec × fps) matrix on this body.",
+             response_model=list[SupportedFormatEntry],
+             dependencies=[Depends(_require_key)])
+    def get_supported_formats() -> list:
+        with _camera() as cam:
+            return cam.supported_formats()
+
+    @app.patch("/api/format", tags=["format"],
+               summary="Change codec / fps / resolution / off-speed.",
+               response_model=VideoFormatResponse,
+               dependencies=[Depends(_require_key)])
     def patch_format(patch: FormatPatch = Body(...)) -> dict:
         body: dict[str, Any] = {}
         if patch.codec is not None:
@@ -251,7 +626,10 @@ def build_app(settings: Settings) -> FastAPI:
         logger.info(f"format: applied → {result}")
         return result
 
-    @app.get("/api/files", dependencies=[Depends(_require_key)])
+    @app.get("/api/files", tags=["media"],
+             summary="Clip index from camera /timelines/0 (recorded takes).",
+             response_model=list[ClipEntry],
+             dependencies=[Depends(_require_key)])
     def get_files(limit: int = 0) -> list:
         with _camera() as cam:
             clips = cam.list_clips()
@@ -259,41 +637,127 @@ def build_app(settings: Settings) -> FastAPI:
             clips = clips[-limit:]
         return clips
 
-    @app.get("/api/filename", dependencies=[Depends(_require_key)])
+    @app.get("/api/filename", tags=["media"],
+             summary="Filename of the most recent clip.",
+             response_model=FilenameResponse,
+             dependencies=[Depends(_require_key)])
     def get_filename() -> dict:
         with _camera() as cam:
             name = cam.current_filename()
         return {"filename": name}
 
-    @app.get("/api/storage", dependencies=[Depends(_require_key)])
+    @app.get("/api/storage", tags=["media"],
+             summary="Active disk + workingset (capacity, free, rec time).",
+             response_model=StorageResponse,
+             dependencies=[Depends(_require_key)])
     def get_storage() -> dict:
         with _camera() as cam:
             return {"active": cam.active_disk(), "workingset": cam.workingset()}
 
-    @app.get("/api/video/{name}", dependencies=[Depends(_require_key)])
-    def get_video(name: str) -> dict | None:
+    def _get_video(name: str) -> dict:
         try:
             with _camera() as cam:
-                return cam.video_param(name)
+                return cam.video_param(name) or {}
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e)) from e
 
-    @app.put("/api/video/{name}", dependencies=[Depends(_require_key)])
-    async def put_video(name: str, request: Request) -> dict | None:
-        body = await request.json()
-        logger.info(f"video/{name}: set {body}")
+    def _set_video(name: str, payload: dict) -> dict:
+        logger.info(f"video/{name}: set {payload}")
         try:
             with _camera() as cam:
-                return cam.set_video_param(name, body) or {"ok": True}
+                return cam.set_video_param(name, payload) or {"ok": True}
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e)) from e
 
-    @app.get("/api/mounts", dependencies=[Depends(_require_key)])
+    @app.get("/api/video/iso", tags=["video"], summary="Read ISO.",
+             response_model=IsoResponse, dependencies=[Depends(_require_key)])
+    def get_iso() -> dict: return _get_video("iso")
+
+    @app.put("/api/video/iso", tags=["video"], summary="Set ISO.",
+             response_model=IsoResponse, dependencies=[Depends(_require_key)])
+    def put_iso(body: IsoBody) -> dict:
+        return _set_video("iso", body.model_dump(exclude_none=True))
+
+    @app.get("/api/video/gain", tags=["video"], summary="Read gain (dB).",
+             response_model=GainResponse, dependencies=[Depends(_require_key)])
+    def get_gain() -> dict: return _get_video("gain")
+
+    @app.put("/api/video/gain", tags=["video"], summary="Set gain (dB).",
+             response_model=GainResponse, dependencies=[Depends(_require_key)])
+    def put_gain(body: GainBody) -> dict:
+        return _set_video("gain", body.model_dump(exclude_none=True))
+
+    @app.get("/api/video/whiteBalance", tags=["video"],
+             summary="Read white balance (Kelvin).",
+             response_model=WhiteBalanceResponse,
+             dependencies=[Depends(_require_key)])
+    def get_wb() -> dict: return _get_video("whiteBalance")
+
+    @app.put("/api/video/whiteBalance", tags=["video"],
+             summary="Set white balance (Kelvin).",
+             response_model=WhiteBalanceResponse,
+             dependencies=[Depends(_require_key)])
+    def put_wb(body: WhiteBalanceBody) -> dict:
+        return _set_video("whiteBalance", body.model_dump(exclude_none=True))
+
+    @app.get("/api/video/whiteBalanceTint", tags=["video"],
+             summary="Read white-balance tint.",
+             response_model=WhiteBalanceTintResponse,
+             dependencies=[Depends(_require_key)])
+    def get_wb_tint() -> dict: return _get_video("whiteBalanceTint")
+
+    @app.put("/api/video/whiteBalanceTint", tags=["video"],
+             summary="Set white-balance tint.",
+             response_model=WhiteBalanceTintResponse,
+             dependencies=[Depends(_require_key)])
+    def put_wb_tint(body: WhiteBalanceTintBody) -> dict:
+        return _set_video("whiteBalanceTint", body.model_dump(exclude_none=True))
+
+    @app.get("/api/video/shutter", tags=["video"],
+             summary="Read shutter (speed or angle).",
+             response_model=ShutterResponse,
+             dependencies=[Depends(_require_key)])
+    def get_shutter() -> dict: return _get_video("shutter")
+
+    @app.put("/api/video/shutter", tags=["video"],
+             summary="Set shutter (speed or angle).",
+             response_model=ShutterResponse,
+             dependencies=[Depends(_require_key)])
+    def put_shutter(body: ShutterBody) -> dict:
+        payload = body.model_dump(exclude_none=True)
+        if not payload:
+            raise HTTPException(
+                status_code=400,
+                detail="provide one of shutterSpeed or shutterAngle",
+            )
+        return _set_video("shutter", payload)
+
+    @app.get("/api/video/ndFilter", tags=["video"],
+             summary="Read ND filter (stops).",
+             response_model=NdFilterResponse,
+             dependencies=[Depends(_require_key)])
+    def get_nd() -> dict: return _get_video("ndFilter")
+
+    @app.put("/api/video/ndFilter", tags=["video"],
+             summary="Set ND filter (stops). Endpoint exists even on bodies "
+                     "without internal ND.",
+             response_model=NdFilterResponse,
+             dependencies=[Depends(_require_key)])
+    def put_nd(body: NdFilterBody) -> dict:
+        return _set_video("ndFilter", body.model_dump(exclude_none=True))
+
+    @app.get("/api/mounts", tags=["files"],
+             summary="List mounted disks (Web Media Manager).",
+             response_model=list[MountEntry],
+             dependencies=[Depends(_require_key)])
     def get_mounts() -> list:
         with _camera() as cam:
             return cam.list_mounts()
 
-    @app.get("/api/mounts/{full_path:path}", dependencies=[Depends(_require_key)])
+    @app.get("/api/mounts/{full_path:path}", tags=["files"],
+             summary="List a directory under a mount, e.g. `usb/UNTITLED`.",
+             response_model=list[FileEntry],
+             dependencies=[Depends(_require_key)])
     def get_mount_listing(full_path: str) -> list:
         with _camera() as cam:
             try:
@@ -301,7 +765,9 @@ def build_app(settings: Settings) -> FastAPI:
             except NotFoundError as e:
                 raise HTTPException(status_code=404, detail=str(e)) from e
 
-    @app.get("/api/download/{full_path:path}", dependencies=[Depends(_require_key)])
+    @app.get("/api/download/{full_path:path}", tags=["files"],
+             summary="Stream-download a file (e.g. a `.braw` clip).",
+             dependencies=[Depends(_require_key)])
     def get_download(full_path: str) -> StreamingResponse:
         cam = _camera()
         try:
@@ -331,7 +797,10 @@ def build_app(settings: Settings) -> FastAPI:
         logger.info(f"download: {full_path} ({clen or '?'} bytes)")
         return StreamingResponse(_iter(), media_type=ctype, headers=headers)
 
-    @app.get("/api/logs", dependencies=[Depends(_require_key)])
+    @app.get("/api/logs", tags=["logs"],
+             summary="Recent server log entries (in-memory ring buffer).",
+             response_model=list[LogEntry],
+             dependencies=[Depends(_require_key)])
     def get_logs(limit: int = 200) -> list:
         buf = list(_log_ring.buf)
         if limit > 0:

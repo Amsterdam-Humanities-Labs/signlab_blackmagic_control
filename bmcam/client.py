@@ -105,6 +105,14 @@ class Camera:
     def get_format(self) -> VideoFormat:
         return self._get("/system/format")
 
+    def supported_formats(self) -> list:
+        data = self._safe_get("/system/supportedFormats", default={}) or {}
+        if isinstance(data, dict):
+            return data.get("supportedFormats") or []
+        if isinstance(data, list):
+            return data
+        return []
+
     def set_format(self, **patch: Any) -> VideoFormat:
         current = self.get_format()
         merged = {**current, **patch}

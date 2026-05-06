@@ -169,8 +169,9 @@ def test_get_video_param() -> None:
 
 
 def test_video_param_invalid_name() -> None:
+    # /api/video/{name} is now per-param explicit routes, so unknown names 404.
     r = _client().get("/api/video/bogus")
-    assert r.status_code == 400
+    assert r.status_code == 404
 
 
 def test_cors_origin_header_present() -> None:
