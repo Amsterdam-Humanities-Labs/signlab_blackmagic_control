@@ -174,6 +174,28 @@ def test_video_param_invalid_name() -> None:
     assert r.status_code == 404
 
 
+@responses.activate
+def test_delete_file_proxies_to_wmm() -> None:
+    responses.add(
+        responses.DELETE,
+        "http://192.168.0.194/mounts/usb/UNTITLED/foo.braw",
+        status=204,
+    )
+    r = _client().delete("/api/mounts/usb/UNTITLED/foo.braw")
+    assert r.status_code == 204
+
+
+@responses.activate
+def test_delete_file_404_propagates() -> None:
+    responses.add(
+        responses.DELETE,
+        "http://192.168.0.194/mounts/usb/UNTITLED/missing.braw",
+        status=404,
+    )
+    r = _client().delete("/api/mounts/usb/UNTITLED/missing.braw")
+    assert r.status_code == 404
+
+
 def test_cors_origin_header_present() -> None:
     r = _client().get(
         "/api/health",

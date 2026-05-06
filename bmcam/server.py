@@ -765,6 +765,20 @@ def build_app(settings: Settings) -> FastAPI:
             except NotFoundError as e:
                 raise HTTPException(status_code=404, detail=str(e)) from e
 
+    @app.delete("/api/mounts/{full_path:path}", tags=["files"],
+                summary="Delete a file or directory on the camera disk. "
+                        "Irreversible — the camera writes through to the "
+                        "USB/SD media immediately.",
+                status_code=204,
+                dependencies=[Depends(_require_key)])
+    def delete_mount_path(full_path: str) -> None:
+        logger.info(f"delete: {full_path}")
+        with _camera() as cam:
+            try:
+                cam.delete_file(full_path)
+            except NotFoundError as e:
+                raise HTTPException(status_code=404, detail=str(e)) from e
+
     @app.get("/api/download/{full_path:path}", tags=["files"],
              summary="Stream-download a file (e.g. a `.braw` clip).",
              dependencies=[Depends(_require_key)])

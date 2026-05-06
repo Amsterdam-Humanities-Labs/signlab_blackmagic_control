@@ -222,6 +222,21 @@ class Camera:
         except ValueError:
             return []
 
+    def delete_file(self, path: str) -> None:
+        if not path.startswith("/"):
+            path = "/" + path
+        url = f"{self.mounts_url()}{path}"
+        resp = self._session.delete(url, timeout=self.timeout)
+        if resp.status_code == 404:
+            raise NotFoundError(f"404 {path}", url=url, status=404, payload=resp.text)
+        if resp.status_code >= 400:
+            raise CameraError(
+                f"HTTP {resp.status_code} DELETE {path}",
+                url=url,
+                status=resp.status_code,
+                payload=resp.text,
+            )
+
     def download_stream(self, path: str) -> "requests.Response":
         if not path.startswith("/"):
             path = "/" + path

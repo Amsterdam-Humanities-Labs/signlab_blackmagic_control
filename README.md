@@ -95,34 +95,57 @@ Tests mock the REST endpoints with `responses`; no camera required.
 
 ## HTTP API server
 
-Run a standalone HTTP server for a website to talk to:
+Run a standalone HTTP server for a website to talk to.
 
-```
+**Foreground** (Ctrl-C to stop):
+
+```bash
+export BMCAM_HOST=192.168.0.194
 export BMCAM_USER=vislab
 export BMCAM_PASSWORD='Blabla100?'
-bmcam serve --bind 0.0.0.0 --port 8000
+.venv312/bin/bmcam serve --bind 0.0.0.0 --port 8000
 ```
 
-- **Web inspector**: http://localhost:8000/ — one-page dashboard with record buttons, video format controls, video/lens parameters, storage, clips, and a live websocket event log.
-- **Swagger UI**: http://localhost:8000/docs — interactive API browser.
+**Background** (survives terminal close):
+
+```bash
+nohup .venv312/bin/bmcam serve --bind 0.0.0.0 --port 8000 \
+      > /tmp/bmcam-server.log 2>&1 &
+disown
+```
+
+Stop a backgrounded instance with `pkill -f 'bmcam serve'` or
+`lsof -ti:8000 | xargs kill`.
+
+URLs:
+
+- **Web inspector**: http://localhost:8000/ — one-page dashboard with record buttons (with optional scene name), video format and parameter dropdowns, storage, clip index, file browser with download + delete buttons, live camera event log, and server log.
+- **Swagger UI**: http://localhost:8000/docs — interactive API browser with full request/response schemas (codec/fps enums, ISO/gain/WB ranges, etc.).
 
 Endpoints (JSON):
 
 | Method | Path | Purpose |
 |---|---|---|
-| GET   | `/api/health`           | liveness |
-| GET   | `/api/status`           | aggregate status |
-| GET   | `/api/record`           | current record state |
-| POST  | `/api/record/start`     | start recording |
-| POST  | `/api/record/stop`      | stop recording |
-| GET   | `/api/format`           | current video format |
-| PATCH | `/api/format`           | change `{codec, frameRate, width, height, ...}` |
-| GET   | `/api/files?limit=N`    | clip list |
-| GET   | `/api/filename`         | last clip filename |
-| GET   | `/api/storage`          | active disk + working set |
-| GET   | `/api/video/{name}`     | iso/shutter/whiteBalance/whiteBalanceTint/gain/ndFilter |
-| PUT   | `/api/video/{name}`     | set one of the above |
-| WS    | `/api/events`           | relays camera event websocket |
+| GET    | `/api/health`           | liveness |
+| GET    | `/api/status`           | aggregate status |
+| GET    | `/api/record`           | current record state |
+| POST   | `/api/record/start`     | start recording (optional `{clipName}`) |
+| POST   | `/api/record/stop`      | stop recording |
+| GET    | `/api/format`           | current video format |
+| PATCH  | `/api/format`           | change `{codec, frameRate, width, height, offSpeed*}` |
+| GET    | `/api/supportedFormats` | allowed (resolution × codec × fps) matrix on this body |
+| GET    | `/api/files?limit=N`    | clip index (from `/timelines/0`) |
+| GET    | `/api/filename`         | last clip filename |
+| GET    | `/api/storage`          | active disk + working set |
+| GET    | `/api/video/{name}`     | iso/shutter/whiteBalance/whiteBalanceTint/gain/ndFilter |
+| PUT    | `/api/video/{name}`     | set one of the above (typed body per parameter) |
+| GET    | `/api/mounts`           | list disks (Web Media Manager) |
+| GET    | `/api/mounts/{path}`    | list directory contents |
+| GET    | `/api/download/{path}`  | stream-download a file |
+| DELETE | `/api/mounts/{path}`    | delete a file or directory on the camera disk (irreversible) |
+| GET    | `/api/logs?limit=N`     | recent server log entries |
+| WS     | `/api/logs/ws`          | live server log stream |
+| WS     | `/api/events`           | relays camera event websocket |
 
 Browser example:
 

@@ -577,7 +577,12 @@ async function loadFiles() {
               <td>file</td>
               <td>${size}</td>
               <td>${mod}</td>
-              <td><a href="${dl}" download>download</a></td>`;
+              <td>
+                <a href="${dl}" download>download</a>
+                <span class="muted"> · </span>
+                <a class="del" data-del="${childPath}" data-name="${name}"
+                   style="color:var(--err);cursor:pointer">delete</a>
+              </td>`;
           }
           list.appendChild(tr);
         }
@@ -597,6 +602,30 @@ async function loadFiles() {
         e.preventDefault();
         _fbPath = a.dataset.dir;
         loadFiles();
+      });
+    });
+    list.querySelectorAll('a[data-del]').forEach(a => {
+      a.addEventListener('click', async (e) => {
+        e.preventDefault();
+        const path = a.dataset.del;
+        const name = a.dataset.name;
+        if (!confirm(
+          `Permanently delete "${name}" from the camera disk?\n\n`
+          + `Path: ${path}\n\n`
+          + `This is irreversible — the camera writes through to the USB/SD `
+          + `media immediately.`
+        )) return;
+        try {
+          const resp = await fetch('/api/mounts' + fbPathEncode(path),
+                                   { method: 'DELETE' });
+          if (!resp.ok && resp.status !== 204) {
+            const body = await resp.json().catch(() => ({}));
+            throw body;
+          }
+          await loadFiles();
+        } catch (err) {
+          alert('delete failed: ' + (typeof err === 'string' ? err : JSON.stringify(err)));
+        }
       });
     });
   } catch (e) {
