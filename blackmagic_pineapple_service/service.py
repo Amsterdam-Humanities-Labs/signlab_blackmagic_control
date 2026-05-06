@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import logging
 import os
 import socket
 from dataclasses import dataclass
@@ -113,13 +114,16 @@ async def websocket_handler(websocket: Any, adapter: BlackmagicAdapter) -> None:
 async def run(settings: Settings) -> None:
     import websockets
 
-    zeroconf, info = register_zeroconf(settings)
+    zeroconf, info = await register_zeroconf(settings)
     adapter = BlackmagicAdapter(settings)
+    ws_logger = logging.getLogger("blackmagic_pineapple_service.websockets")
+    ws_logger.setLevel(logging.CRITICAL)
     try:
         async with websockets.serve(
             lambda ws: websocket_handler(ws, adapter),
             settings.bind,
             settings.port,
+            logger=ws_logger,
         ):
             print(
                 f"Blackmagic service listening on ws://{settings.bind}:{settings.port} "
@@ -127,12 +131,13 @@ async def run(settings: Settings) -> None:
             )
             await asyncio.Future()
     finally:
-        zeroconf.unregister_service(info)
-        zeroconf.close()
+        await zeroconf.async_unregister_service(info)
+        await zeroconf.async_close()
 
 
-def register_zeroconf(settings: Settings) -> tuple[Any, Any]:
-    from zeroconf import ServiceInfo, Zeroconf
+async def register_zeroconf(settings: Settings) -> tuple[Any, Any]:
+    from zeroconf import ServiceInfo
+    from zeroconf.asyncio import AsyncZeroconf
 
     service_type = ensure_dot(settings.service_type)
     service_name = f"{settings.service_name}.{service_type}"
@@ -145,8 +150,8 @@ def register_zeroconf(settings: Settings) -> tuple[Any, Any]:
         properties={"camera": settings.camera_host},
         server=f"{socket.gethostname()}.local.",
     )
-    zeroconf = Zeroconf()
-    zeroconf.register_service(info)
+    zeroconf = AsyncZeroconf()
+    await zeroconf.async_register_service(info)
     print(f"Registered Zeroconf service {service_name} at {ip}:{settings.port}")
     return zeroconf, info
 
@@ -195,4 +200,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
