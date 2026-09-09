@@ -30,19 +30,14 @@ here talks to `192.168.0.194` over plain HTTP/websockets and the server binds
 `0.0.0.0:8000` for browsers on the same LAN; the signcollect core VPS has no
 route to that subnet.
 
-**TODO: confirm which machine.** Two candidates, with evidence pulling in
-different directions:
+**The Vicon PC, in the Visualisation Lab** (confirmed 2026-09-09, signlab_signcollect-stack#28).
 
-- `signlab_blackmagic_RD_sync` expects a `bmcam serve` instance at
-  `http://localhost:8000` on a host whose Blackmagic RAW SDK path is macOS
-  (`/Applications/...`) — pointing at the **Mac mini**.
-- `blackmagic_pineapple_service/README.md` documents its install and run steps
-  in PowerShell against `.venv\Scripts\python.exe`, i.e. a **Windows** host —
-  most plausibly the Vicon PC, which is where the rest of the Pineapple/Shogun
-  pipeline lives.
-
-Those may well be two deployments of the same repo on two machines. Confirm
-before relying on either.
+The repository carries code for both platforms, which is what made this
+ambiguous from the source alone: `blackmagic_pineapple_service` documents its
+install in PowerShell against `.venv\Scripts\python.exe`, matching the Windows
+host it actually runs on, while `signlab_blackmagic_RD_sync` builds its
+transcoder with a macOS-only script. Only the Windows path is deployed. Treat
+the macOS branches as supported-but-unused unless you find a second deployment.
 
 ## Status
 
