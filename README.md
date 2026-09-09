@@ -1,8 +1,102 @@
-# bmcam
+# signlab_blackmagic_control (`bmcam`)
 
-CLI and Python library for controlling a Blackmagic camera over the Camera
-Control REST API. Targets a Blackmagic 6K Pro at `192.168.0.194` by default;
-works with any Blackmagic camera running Camera OS with the REST API enabled.
+CLI, Python library and HTTP server for driving the studio's Blackmagic Studio
+Camera 6K Pro over the Camera Control REST API — start/stop a recording, set the
+video format, browse and download the clips on the camera's disk.
+
+## What it does
+
+The camera exposes a REST API and a Web Media Manager on its own IP on the studio
+LAN. `bmcam` wraps both behind one interface, in three layers:
+
+- **`bmcam` CLI** — one-shot commands (`bmcam record start`, `bmcam files`,
+  `bmcam --json status`) and a websocket event tail.
+- **`bmcam` library** — the `Camera` class, used directly by other repos.
+- **`bmcam serve`** — a FastAPI facade on port 8000 with a single-page web
+  inspector, Swagger docs and websocket relays, so a browser or another machine
+  can drive the camera without speaking the camera's own API. This is the
+  interface `signlab_blackmagic_RD_sync` consumes to pull and delete clips.
+
+A fourth, separate component lives in `blackmagic_pineapple_service/`: a
+Zeroconf + websocket adapter that advertises the camera as a `_mocap._tcp.local.`
+device and accepts the same `Start` / `Stop` / `SetName` commands as the OBS and
+Shogun adapters, so the Pineapple discovery pipeline can start the Blackmagic
+camera alongside the rest of a mocap take.
+
+## Where it runs
+
+**On a machine on the studio camera LAN — not on the web server.** Everything
+here talks to `192.168.0.194` over plain HTTP/websockets and the server binds
+`0.0.0.0:8000` for browsers on the same LAN; the signcollect core VPS has no
+route to that subnet.
+
+**TODO: confirm which machine.** Two candidates, with evidence pulling in
+different directions:
+
+- `signlab_blackmagic_RD_sync` expects a `bmcam serve` instance at
+  `http://localhost:8000` on a host whose Blackmagic RAW SDK path is macOS
+  (`/Applications/...`) — pointing at the **Mac mini**.
+- `blackmagic_pineapple_service/README.md` documents its install and run steps
+  in PowerShell against `.venv\Scripts\python.exe`, i.e. a **Windows** host —
+  most plausibly the Vicon PC, which is where the rest of the Pineapple/Shogun
+  pipeline lives.
+
+Those may well be two deployments of the same repo on two machines. Confirm
+before relying on either.
+
+## Status
+
+**Experimental**, and in daily-ish use: the CLI, library and server are tested
+(33 mocked tests) and depended on by the research-drive sync, but nothing here is
+installed as a service — `bmcam serve` is started by hand (see below) and the
+Pineapple adapter is run from a shell.
+
+## How to run it
+
+Python ≥ 3.10 (3.12 in practice). Install into a venv, then either use the CLI
+or start the server; there is no scheduler involved. **`signlab_pythonCron`, the
+estate scheduler, has no job for this repo** — nothing runs it automatically.
+
+```bash
+python3.12 -m venv .venv
+.venv/bin/pip install -e ".[dev]"
+.venv/bin/bmcam status                 # one-shot
+.venv/bin/bmcam serve --bind 0.0.0.0 --port 8000
+```
+
+See [Install](#install), [CLI](#cli) and [HTTP API server](#http-api-server)
+below for the full surface.
+
+## Configuration
+
+No config file is required and no credentials are committed — host and auth come
+from flags or the environment:
+
+| Variable | Purpose |
+|---|---|
+| `BMCAM_HOST` | camera IP (default `192.168.0.194`) |
+| `BMCAM_USER` / `BMCAM_PASSWORD` | camera basic-auth credentials |
+| `BMCAM_API_KEY` | require `X-API-Key` on the HTTP server (off by default) |
+| `BMCAM_ALLOW_ORIGINS` | CORS allowlist for the HTTP server (default `*`) |
+| `BMCAM_TIMEOUT`, `BMCAM_DEBUG` | request timeout; full tracebacks |
+
+The camera's basic-auth user and password are set on the camera itself, in
+**Setup → Network**. Ask the lab for the current pair rather than expecting them
+in this repo. The Pineapple adapter can also read them from a YAML file — copy
+`blackmagic_pineapple_service/config.example.yaml` and edit it locally.
+
+## Dependencies
+
+- A **Blackmagic Studio Camera 6K Pro** (or compatible body) on the LAN, with
+  **Web Media Manager** and **REST API** switched on — see below.
+- Python packages: `requests`, `click`, `websocket-client`, `fastapi`, `uvicorn`
+  (plus `zeroconf`/`websockets` for the Pineapple adapter, see
+  `blackmagic_pineapple_service/requirements.txt`).
+- Consumed by **`signlab_blackmagic_RD_sync`**, which downloads and deletes clips
+  through this server's HTTP API.
+- The **Pineapple discovery pipeline** (separate repo) for the Zeroconf adapter.
+- `CLAUDE.md` records what this camera's firmware does and does not expose
+  (no livestream API, no network preview) — read it before adding features.
 
 ## Install
 
@@ -47,7 +141,7 @@ Examples:
 
 ```
 bmcam --json status
-bmcam --user vislab --password 'Blabla100?' record start
+bmcam --user "$BMCAM_USER" --password "$BMCAM_PASSWORD" record start
 bmcam format set --fps 50
 bmcam files --limit 5
 bmcam stream --events          # live JSON events, one per line
@@ -57,8 +151,8 @@ Auth and host can also come from the environment:
 
 ```
 export BMCAM_HOST=192.168.0.194
-export BMCAM_USER=vislab
-export BMCAM_PASSWORD='Blabla100?'
+export BMCAM_USER=<camera user>
+export BMCAM_PASSWORD=<camera password>
 bmcam status
 ```
 
@@ -101,8 +195,8 @@ Run a standalone HTTP server for a website to talk to.
 
 ```bash
 export BMCAM_HOST=192.168.0.194
-export BMCAM_USER=vislab
-export BMCAM_PASSWORD='Blabla100?'
+export BMCAM_USER=<camera user>
+export BMCAM_PASSWORD=<camera password>
 .venv312/bin/bmcam serve --bind 0.0.0.0 --port 8000
 ```
 
