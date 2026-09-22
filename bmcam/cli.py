@@ -228,7 +228,13 @@ def stream(ctx: click.Context, mode: str) -> None:
     "--api-key",
     envvar="BMCAM_API_KEY",
     default=None,
-    help="Require X-API-Key header matching this value. If unset, API is open on the bound interface.",
+    help="Key clients must send as X-API-Key (the web inspector asks for it). Required unless --no-auth.",
+)
+@click.option(
+    "--no-auth",
+    is_flag=True,
+    envvar="BMCAM_NO_AUTH",
+    help="LAN-only opt-out: serve with no key. Anyone who can reach the port can record and delete clips.",
 )
 @click.option(
     "--allow-origin",
@@ -244,11 +250,18 @@ def serve(
     bind: str,
     port: int,
     api_key: str | None,
+    no_auth: bool,
     allow_origins: tuple[str, ...],
     reload: bool,
 ) -> None:
     """Run a FastAPI HTTP server wrapping the camera."""
     import uvicorn
+
+    if not api_key and not no_auth:
+        raise click.UsageError(
+            "bmcam serve needs a key: set BMCAM_API_KEY or pass --api-key. "
+            "For LAN-only use without one, pass --no-auth explicitly."
+        )
 
     os.environ["BMCAM_HOST"] = ctx.obj["host"]
     os.environ["BMCAM_TIMEOUT"] = str(ctx.obj["timeout"])
@@ -258,6 +271,10 @@ def serve(
         os.environ["BMCAM_PASSWORD"] = ctx.obj["password"]
     if api_key is not None:
         os.environ["BMCAM_API_KEY"] = api_key
+    if no_auth:
+        os.environ["BMCAM_NO_AUTH"] = "1"
+        click.echo("WARNING: --no-auth: the API is open to anyone who can reach "
+                   f"{bind}:{port}. LAN-only use.", err=True)
     os.environ["BMCAM_ALLOW_ORIGINS"] = ",".join(allow_origins)
 
     click.echo(

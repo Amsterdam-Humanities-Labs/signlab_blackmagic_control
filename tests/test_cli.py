@@ -126,3 +126,11 @@ def test_api_disabled_prints_hint() -> None:
     # Without main() wrapping, ApiDisabledError is raised - verify it bubbled:
     from bmcam.errors import ApiDisabledError
     assert isinstance(result.exception, ApiDisabledError)
+
+
+def test_serve_refuses_without_key_or_opt_out(monkeypatch) -> None:
+    monkeypatch.delenv("BMCAM_API_KEY", raising=False)
+    monkeypatch.delenv("BMCAM_NO_AUTH", raising=False)
+    r = _runner().invoke(cli, ["serve"])
+    assert r.exit_code != 0
+    assert "--no-auth" in r.output
