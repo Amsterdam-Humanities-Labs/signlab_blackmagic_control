@@ -273,11 +273,26 @@ const VIDEO_PARAMS = [
     fmtLabel: (v) => `${v} stop` },
 ];
 
+// `bmcam serve` needs its API key (X-API-Key) unless started with --no-auth.
+// The key is kept in the bmcam_key cookie so downloads and websockets carry
+// it too; on a 401 ask for it once and retry.
+let keyAsked = false;
+async function authFetch(p, opts) {
+  const r = await fetch(p, opts);
+  if (r.status !== 401 || keyAsked) return r;
+  keyAsked = true;
+  const k = prompt('bmcam API key (BMCAM_API_KEY on the server):');
+  if (!k) return r;
+  document.cookie = 'bmcam_key=' + encodeURIComponent(k) + '; path=/; SameSite=Strict; max-age=31536000';
+  location.reload();
+  return r;
+}
+
 const api = {
-  async get(p)          { return fetch(p).then(r => r.ok ? r.json() : Promise.reject(r)); },
-  async post(p, body)   { return fetch(p, { method: 'POST', headers:{'Content-Type':'application/json'}, body: body ? JSON.stringify(body) : undefined }).then(async r => r.ok ? r.json() : Promise.reject(await r.json().catch(()=>({status:r.status})))); },
-  async patch(p, body)  { return fetch(p, { method: 'PATCH', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body) }).then(async r => r.ok ? r.json() : Promise.reject(await r.json().catch(()=>({status:r.status})))); },
-  async put(p, body)    { return fetch(p, { method: 'PUT',   headers:{'Content-Type':'application/json'}, body: JSON.stringify(body) }).then(async r => r.ok ? r.json() : Promise.reject(await r.json().catch(()=>({status:r.status})))); },
+  async get(p)          { return authFetch(p).then(r => r.ok ? r.json() : Promise.reject(r)); },
+  async post(p, body)   { return authFetch(p, { method: 'POST', headers:{'Content-Type':'application/json'}, body: body ? JSON.stringify(body) : undefined }).then(async r => r.ok ? r.json() : Promise.reject(await r.json().catch(()=>({status:r.status})))); },
+  async patch(p, body)  { return authFetch(p, { method: 'PATCH', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body) }).then(async r => r.ok ? r.json() : Promise.reject(await r.json().catch(()=>({status:r.status})))); },
+  async put(p, body)    { return authFetch(p, { method: 'PUT',   headers:{'Content-Type':'application/json'}, body: JSON.stringify(body) }).then(async r => r.ok ? r.json() : Promise.reject(await r.json().catch(()=>({status:r.status})))); },
 };
 
 function setConn(ok, text) {
@@ -616,7 +631,7 @@ async function loadFiles() {
           + `media immediately.`
         )) return;
         try {
-          const resp = await fetch('/api/mounts' + fbPathEncode(path),
+          const resp = await authFetch('/api/mounts' + fbPathEncode(path),
                                    { method: 'DELETE' });
           if (!resp.ok && resp.status !== 204) {
             const body = await resp.json().catch(() => ({}));
