@@ -18,7 +18,7 @@ Experimental, in regular use. Nothing supervises it: `bmcam serve` and the Pinea
 ```bash
 python3.12 -m venv .venv && .venv/bin/pip install -e ".[dev]"    # Python >= 3.10
 .venv/bin/bmcam --json status
-.venv/bin/bmcam serve --bind 0.0.0.0 --port 8000
+BMCAM_API_KEY=... .venv/bin/bmcam serve --bind 0.0.0.0 --port 8000   # or --no-auth, LAN-only
 .venv/bin/pytest -q                                              # mocked, no camera needed
 ```
 One-time camera setup: Setup -> Network -> Web Media Manager On, REST API On (or tick Web Media Manager and REST Camera Control in Blackmagic Camera Setup). Until then every endpoint returns 404.
@@ -29,7 +29,8 @@ CLI exit codes: 0 ok, 1 camera 5xx, 2 REST API off, 3 unreachable/timeout, 4 bad
 |---|---|
 | `BMCAM_HOST` / `--host` | camera IP (default `192.168.0.194`) |
 | `BMCAM_USER`, `BMCAM_PASSWORD` | camera basic auth (set on the camera under Setup -> Network) |
-| `BMCAM_API_KEY` / `--api-key` | require `X-API-Key` on `bmcam serve`; off by default ([stack#31](https://github.com/Amsterdam-Humanities-Labs/signlab_signcollect-stack/issues/31)) |
+| `BMCAM_API_KEY` / `--api-key` | required by `bmcam serve`: every `/api` route but `/api/health` needs `X-API-Key` (web inspector: asks once, keeps it in a cookie). `signlab_blackmagic_RD_sync` sends the same variable |
+| `BMCAM_NO_AUTH=1` / `--no-auth` | explicit LAN-only opt-out: serve with no key (logs a warning). Without a key or this, `serve` refuses to start |
 | `BMCAM_ALLOW_ORIGINS` / `--allow-origin` | CORS allowlist (default `*`) |
 | `BMCAM_TIMEOUT`, `BMCAM_DEBUG` | request timeout; full tracebacks |
 
