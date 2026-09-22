@@ -69,8 +69,8 @@ Livestream API to the Studio line in later firmware revisions.
 
 ```bash
 .venv312/bin/pytest -q           # 33 tests, all mocked with `responses`
-.venv312/bin/bmcam serve          # runs FastAPI on :8000
+.venv312/bin/bmcam serve          # runs FastAPI on :8000; needs BMCAM_API_KEY or --no-auth
 ```
 
 Env vars: `BMCAM_HOST`, `BMCAM_USER`, `BMCAM_PASSWORD`, `BMCAM_API_KEY`,
-`BMCAM_ALLOW_ORIGINS`, `BMCAM_TIMEOUT`, `BMCAM_DEBUG`.
+`BMCAM_NO_AUTH`, `BMCAM_ALLOW_ORIGINS`, `BMCAM_TIMEOUT`, `BMCAM_DEBUG`.
