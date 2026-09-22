@@ -8,7 +8,7 @@ from bmcam.server import Settings, build_app
 BASE = "http://192.168.0.194/control/api/v1"
 
 
-def _client(api_key: str | None = None) -> TestClient:
+def _client(api_key: str | None = None, no_auth: bool | None = None) -> TestClient:
     settings = Settings(
         host="192.168.0.194",
         username=None,
@@ -16,6 +16,8 @@ def _client(api_key: str | None = None) -> TestClient:
         timeout=1.0,
         api_key=api_key,
         allow_origins=["*"],
+        # Most tests exercise the camera facade, not auth: open unless a key is given.
+        no_auth=(api_key is None) if no_auth is None else no_auth,
     )
     app = build_app(settings)
     return TestClient(app)
@@ -127,6 +129,21 @@ def test_api_key_required_when_set() -> None:
     assert c.get("/api/record").status_code == 401
     assert c.get("/api/record", headers={"X-API-Key": "wrong"}).status_code == 401
     assert c.get("/api/record", headers={"X-API-Key": "secret"}).status_code == 200
+    assert c.get("/api/record", cookies={"bmcam_key": "secret"}).status_code == 200
+
+
+def test_no_key_and_no_opt_out_fails_closed() -> None:
+    c = _client(api_key=None, no_auth=False)
+    assert c.get("/api/health").status_code == 200
+    assert c.get("/api/record").status_code == 401
+    assert c.delete("/api/mounts/usb0/a.braw").status_code == 401
+    assert c.delete("/api/mounts/usb0/a.braw", headers={"X-API-Key": ""}).status_code == 401
+
+
+def test_delete_requires_key() -> None:
+    c = _client(api_key="secret")
+    assert c.delete("/api/mounts/usb0/a.braw").status_code == 401
+    assert c.post("/api/record/start").status_code == 401
 
 
 @responses.activate
@@ -202,3 +219,15 @@ def test_cors_origin_header_present() -> None:
         headers={"Origin": "http://example.com"},
     )
     assert r.headers.get("access-control-allow-origin") in {"*", "http://example.com"}
+
+
+def test_log_websocket_requires_key() -> None:
+    import pytest
+    from starlette.websockets import WebSocketDisconnect
+
+    c = _client(api_key="secret")
+    with pytest.raises(WebSocketDisconnect):
+        with c.websocket_connect("/api/logs/ws") as ws:
+            ws.receive_text()
+    with c.websocket_connect("/api/logs/ws", headers={"X-API-Key": "secret"}):
+        pass

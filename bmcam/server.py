@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import collections
+import hmac
 import json as jsonlib
 import logging
 import os
@@ -13,7 +14,7 @@ from pathlib import Path
 
 from typing import Literal
 
-from fastapi import Body, Depends, FastAPI, Header, HTTPException, Request
+from fastapi import Body, Cookie, Depends, FastAPI, Header, HTTPException, Request, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -413,13 +414,17 @@ class Settings:
         timeout: float,
         api_key: str | None,
         allow_origins: list[str],
+        no_auth: bool = False,
     ) -> None:
         self.host = host
         self.username = username
         self.password = password
         self.timeout = timeout
-        self.api_key = api_key
+        self.api_key = api_key or None
         self.allow_origins = allow_origins
+        # Explicit LAN-only opt-out. Without it and without a key, every
+        # /api route except /api/health answers 401 (fail closed).
+        self.no_auth = no_auth
 
 
 def build_app(settings: Settings) -> FastAPI:
@@ -462,11 +467,37 @@ def build_app(settings: Settings) -> FastAPI:
         allow_headers=["*"],
     )
 
-    def _require_key(x_api_key: str | None = Header(default=None)) -> None:
-        if settings.api_key is None:
-            return
-        if x_api_key != settings.api_key:
+    if settings.no_auth:
+        logger.warning("bmcam serve: authentication disabled (--no-auth); "
+                       "anyone who can reach this port can record and delete clips")
+    elif settings.api_key is None:
+        logger.error("bmcam serve: no BMCAM_API_KEY set; all /api routes except "
+                     "/api/health will answer 401 (set a key, or --no-auth for LAN-only use)")
+
+    def _key_ok(given: str | None) -> bool:
+        if settings.no_auth:
+            return True
+        if settings.api_key is None or not given:
+            return False
+        return hmac.compare_digest(given.encode(), settings.api_key.encode())
+
+    # The X-API-Key header is what scripts send. The web inspector cannot put
+    # a header on a download link or a websocket, so it stores the key in the
+    # bmcam_key cookie (SameSite=Strict) and the browser sends it everywhere.
+    def _require_key(
+        x_api_key: str | None = Header(default=None),
+        bmcam_key: str | None = Cookie(default=None),
+    ) -> None:
+        if not _key_ok(x_api_key or urllib.parse.unquote(bmcam_key or "")):
             raise HTTPException(status_code=401, detail="invalid or missing X-API-Key")
+
+    async def _ws_key_ok(websocket: WebSocket) -> bool:
+        given = (websocket.headers.get("x-api-key")
+                 or urllib.parse.unquote(websocket.cookies.get("bmcam_key", "")))
+        if _key_ok(given):
+            return True
+        await websocket.close(code=1008)
+        return False
 
     def _camera() -> Camera:
         return Camera(
@@ -822,7 +853,9 @@ def build_app(settings: Settings) -> FastAPI:
         return buf
 
     @app.websocket("/api/logs/ws")
-    async def ws_logs(websocket) -> None:  # type: ignore[no-untyped-def]
+    async def ws_logs(websocket: WebSocket) -> None:
+        if not await _ws_key_ok(websocket):
+            return
         await websocket.accept()
         q: asyncio.Queue[dict] = asyncio.Queue(maxsize=500)
         for entry in list(_log_ring.buf)[-50:]:
@@ -864,7 +897,9 @@ def build_app(settings: Settings) -> FastAPI:
                 logger.warning(f"camera response: {d}")
 
     @app.websocket("/api/events")
-    async def ws_events(websocket) -> None:  # type: ignore[no-untyped-def]
+    async def ws_events(websocket: WebSocket) -> None:
+        if not await _ws_key_ok(websocket):
+            return
         await websocket.accept()
         try:
             for event in event_stream(
@@ -900,6 +935,7 @@ def settings_from_env() -> Settings:
         timeout=float(os.environ.get("BMCAM_TIMEOUT", "5.0")),
         api_key=os.environ.get("BMCAM_API_KEY"),
         allow_origins=allow_origins,
+        no_auth=os.environ.get("BMCAM_NO_AUTH") == "1",
     )
 
 
