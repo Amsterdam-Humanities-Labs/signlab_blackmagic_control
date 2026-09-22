@@ -29,8 +29,7 @@ Or open `http://192.168.0.194/control/documentation.html` in a browser.
 | `LensControl.yaml` | `/control/swagger/Camera/LensControl.yaml` |
 | `ColorCorrectionControl.yaml` | `/control/swagger/Camera/ColorCorrectionControl.yaml` |
 | `Notification.yaml` | `/control/asyncAPI/Notification.yaml` — websocket events |
-| `RESTAPIforBlackmagicCameras_2025-08.pdf` | Official Blackmagic PDF (Aug 2025 revision) |
-| `RESTAPIforBlackmagicCameras_2025-08.txt` | Plain-text extraction of the PDF (grep-friendly) |
+| `RESTAPIforBlackmagicCameras_2025-08.pdf` | Official Blackmagic PDF (Aug 2025 revision); `pdftotext` it if you need to grep |
 
 ## Camera model
 
