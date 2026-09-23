@@ -27,7 +27,7 @@ Environment variables override config values:
 ```powershell
 $env:BMCAM_HOST = "192.168.0.194"
 $env:BMCAM_USER = "vislab"
-$env:BMCAM_PASSWORD = "Blabla100?"
+$env:BMCAM_PASSWORD = "<camera password>"
 $env:BMCAM_SERVICE_PORT = "8780"
 .\.venv\Scripts\python.exe .\blackmagic_pineapple_service\service.py
 ```

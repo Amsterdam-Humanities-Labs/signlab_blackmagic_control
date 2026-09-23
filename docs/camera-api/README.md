@@ -5,9 +5,9 @@ Saved 2026-04-22 from the camera at `192.168.0.194`.
 ## How to refresh
 
 ```bash
-curl -u vislab:'Blabla100?' http://192.168.0.194/control/documentation.html
+curl -u vislab:"$BMCAM_PASSWORD" http://192.168.0.194/control/documentation.html
 # then pull each YAML listed in the index:
-curl -u vislab:'Blabla100?' http://192.168.0.194/control/swagger/common/SystemControl.yaml
+curl -u vislab:"$BMCAM_PASSWORD" http://192.168.0.194/control/swagger/common/SystemControl.yaml
 # etc.
 ```
 
