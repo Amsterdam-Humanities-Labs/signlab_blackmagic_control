@@ -1,4 +1,4 @@
-# signlab_blackmagic_control (`bmcam`)
+# signlab_blackmagic_control
 CLI, Python library and HTTP server for the studio's Blackmagic Studio Camera 6K Pro. It uses the camera's REST API to control recording, the video format and the clips on disk.
 
 ## What it does
