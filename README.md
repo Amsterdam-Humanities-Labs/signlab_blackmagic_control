@@ -31,10 +31,10 @@ CLI exit codes: 0 ok, 1 camera 5xx, 2 REST API off, 3 unreachable or timeout, 4 
 | `BMCAM_USER`, `BMCAM_PASSWORD` | camera basic auth (set on the camera under Setup -> Network) |
 | `BMCAM_API_KEY` / `--api-key` | required by `bmcam serve`. Every `/api` route except `/api/health` needs `X-API-Key`. The web inspector asks once and keeps the key in a cookie. signlab_blackmagic_RD_sync sends the same variable |
 | `BMCAM_NO_AUTH=1` / `--no-auth` | explicit opt-out for LAN use: serve without a key (logs a warning). With neither a key nor this flag, `serve` refuses to start |
-| `BMCAM_ALLOW_ORIGINS` / `--allow-origin` | CORS allowlist (default `*`) |
-| `BMCAM_TIMEOUT`, `BMCAM_DEBUG` | request timeout; full tracebacks |
+| `--allow-origin` | CORS allowlist for `serve`, repeatable (default `*`). `serve` overwrites `BMCAM_ALLOW_ORIGINS` with it |
+| `--timeout`, `BMCAM_DEBUG` | camera request timeout (default 5 s); full tracebacks on errors |
 
-The Pineapple adapter can also read a local copy of `blackmagic_pineapple_service/config.example.yaml`.
+The Pineapple adapter reads `--config <yaml>` (template: `blackmagic_pineapple_service/config.example.yaml`). `BMCAM_HOST`, `BMCAM_USER`, `BMCAM_PASSWORD`, `BMCAM_TIMEOUT` and `BMCAM_SERVICE_*` override it.
 
 ## Dependencies
 - Blackmagic Studio Camera 6K Pro (or a compatible body) with the REST API on. Vendor API: `docs/camera-api/` (YAML specs and the PDF).
