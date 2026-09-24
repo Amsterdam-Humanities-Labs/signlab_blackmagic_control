@@ -41,3 +41,10 @@ The Pineapple adapter reads `--config <yaml>` (template: `blackmagic_pineapple_s
 - Python: `requests`, `click`, `websocket-client`, `fastapi`, `uvicorn`. The Pineapple adapter adds `zeroconf` and `websockets`.
 - Used by [signlab_blackmagic_RD_sync](https://github.com/Amsterdam-Humanities-Labs/signlab_blackmagic_RD_sync) (HTTP) and the Pineapple discovery pipeline (Zeroconf).
 - Stack overview: [signlab_signcollect-stack](https://github.com/Amsterdam-Humanities-Labs/signlab_signcollect-stack).
+
+## License and citation
+
+Apache License 2.0, copyright University of Amsterdam: see [LICENSE](LICENSE) and
+[NOTICE](NOTICE). You may use it, also commercially, as long as you credit
+Gomer Otterspeer / University of Amsterdam as the source. To cite it, use
+[CITATION.cff](CITATION.cff) (the *Cite this repository* button on GitHub) or the DOI [10.21942/uva.33980305](https://doi.org/10.21942/uva.33980305).
