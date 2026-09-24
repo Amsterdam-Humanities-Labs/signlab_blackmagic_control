@@ -1,6 +1,6 @@
 camera_host: 192.168.0.194
 camera_user: vislab
-camera_password: "Blabla100?"
+camera_password: "<camera password>"
 camera_timeout: 5.0
 
 service_name: BlackmagicCamera
